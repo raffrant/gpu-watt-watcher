@@ -4,7 +4,11 @@ Run with:    streamlit run gpu_energy_bench/streamlit_app.py
 """
 from __future__ import annotations
 
+import io
+import json
 import sys
+import time as _t
+from dataclasses import asdict
 from pathlib import Path
 
 # Allow `streamlit run gpu_energy_bench/streamlit_app.py` from repo root.
@@ -12,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pandas as pd
 import plotly.express as px
+import plotly.io as pio
 import streamlit as st
 
 from gpu_energy_bench import nvml_utils as nv
@@ -21,6 +26,102 @@ from gpu_energy_bench.registry import load_tests, evaluate
 st.set_page_config(page_title="GPU Energy Bench", layout="wide")
 
 TESTS_PATH = Path(__file__).parent / "tests.yaml"
+
+# Persist last run so the user can export it from any tab.
+if "last_run" not in st.session_state:
+    st.session_state.last_run = None  # dict: {label, metrics, samples_df}
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+def _samples_df(sampler) -> pd.DataFrame:
+    return pd.DataFrame([s.__dict__ for s in sampler.samples])
+
+
+def _stash_last_run(label: str, metrics, sampler) -> None:
+    st.session_state.last_run = {
+        "label": label,
+        "metrics": metrics,
+        "samples_df": _samples_df(sampler),
+    }
+
+
+def _telemetry_download(samples_df: pd.DataFrame, key: str, label: str = "Download telemetry CSV"):
+    if samples_df.empty:
+        return
+    csv = samples_df.to_csv(index=False).encode()
+    st.download_button(label, csv, f"telemetry_{key}.csv", "text/csv", key=f"dl_tel_{key}")
+
+
+def _export_panel(label_prefix: str = "latest"):
+    """Renders an export box for the most recent run."""
+    last = st.session_state.last_run
+    if not last:
+        st.info("Run a benchmark or test first to enable exports.")
+        return
+
+    metrics = last["metrics"]
+    samples_df = last["samples_df"]
+    metrics_dict = asdict(metrics) if hasattr(metrics, "__dataclass_fields__") else dict(metrics.__dict__)
+    # ensure JSON-friendly
+    metrics_dict["params"] = dict(metrics_dict.get("params", {}))
+    metrics_dict["extra"] = dict(metrics_dict.get("extra", {}))
+
+    st.caption(f"Latest run: **{last['label']}**")
+    c1, c2, c3, c4 = st.columns(4)
+
+    # Metrics CSV
+    metrics_csv = pd.DataFrame([metrics_dict]).to_csv(index=False).encode()
+    c1.download_button("Metrics CSV", metrics_csv,
+                       f"metrics_{label_prefix}.csv", "text/csv",
+                       key=f"dl_metrics_csv_{label_prefix}")
+
+    # Metrics JSON
+    metrics_json = json.dumps(metrics_dict, indent=2, default=str).encode()
+    c2.download_button("Metrics JSON", metrics_json,
+                       f"metrics_{label_prefix}.json", "application/json",
+                       key=f"dl_metrics_json_{label_prefix}")
+
+    # Telemetry CSV
+    if not samples_df.empty:
+        c3.download_button("Telemetry CSV",
+                           samples_df.to_csv(index=False).encode(),
+                           f"telemetry_{label_prefix}.csv", "text/csv",
+                           key=f"dl_tel_csv_{label_prefix}")
+
+        # Plotly HTML (power + util + temp)
+        fig = px.line(samples_df, x="t", y=["power_w", "util_gpu", "temp_c"],
+                      title=f"Run telemetry — {last['label']}")
+        html_buf = io.StringIO()
+        pio.write_html(fig, file=html_buf, include_plotlyjs="cdn", full_html=True)
+        c4.download_button("Plotly HTML", html_buf.getvalue().encode(),
+                           f"telemetry_{label_prefix}.html", "text/html",
+                           key=f"dl_tel_html_{label_prefix}")
+    else:
+        c3.caption("No telemetry samples captured.")
+
+
+def _render_check_panel(checks):
+    """Big visible PASS/FAIL panel for each threshold."""
+    if not checks:
+        st.info("This test defines no thresholds — nothing to evaluate.")
+        return
+    overall = all(c.passed for c in checks)
+    if overall:
+        st.success("✅ ALL THRESHOLDS PASSED")
+    else:
+        st.error("❌ ONE OR MORE THRESHOLDS FAILED")
+
+    cols = st.columns(min(len(checks), 3) or 1)
+    for i, c in enumerate(checks):
+        with cols[i % len(cols)]:
+            if c.passed:
+                st.success(f"✅ **{c.name}**\n\n"
+                           f"actual `{c.actual:.4g}` {c.op} threshold `{c.threshold:.4g}`")
+            else:
+                st.error(f"❌ **{c.name}**\n\n"
+                         f"actual `{c.actual:.4g}` not {c.op} threshold `{c.threshold:.4g}`")
 
 
 # ---------------------------------------------------------------------------
@@ -39,14 +140,14 @@ except Exception as e:
     n_devices = 0
 
 
-tab_info, tab_bench, tab_tests, tab_telemetry, tab_power, tab_history = st.tabs(
+tab_info, tab_bench, tab_tests, tab_telemetry, tab_power, tab_history, tab_export = st.tabs(
     ["GPU info", "Matrix benchmark", "Test registry", "Telemetry",
-     "Power limits", "History"]
+     "Power limits", "History", "Export"]
 )
 
 
 # ---------------------------------------------------------------------------
-# GPU info — live snapshot (from firstbasic.py logic)
+# GPU info
 # ---------------------------------------------------------------------------
 with tab_info:
     st.header("Live GPU snapshot")
@@ -76,7 +177,7 @@ with tab_info:
 
 
 # ---------------------------------------------------------------------------
-# Matrix benchmark — interactive single-shot run (from matrixmultipy.py)
+# Matrix benchmark
 # ---------------------------------------------------------------------------
 with tab_bench:
     st.header("Matrix multiply benchmark")
@@ -94,6 +195,7 @@ with tab_bench:
                 device=device, sample_interval_s=sample_interval, gpu_index=gpu_index,
             )
         st.success(f"Done in {metrics.elapsed_s:.3f} s")
+        _stash_last_run(f"matmul size={size} dtype={dtype} reps={reps}", metrics, sampler)
 
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("GFLOPs/s", f"{metrics.gflops_per_s:,.1f}")
@@ -107,7 +209,6 @@ with tab_bench:
         m3.metric("Avg util (%)", f"{metrics.avg_util_gpu:.1f}")
         m4.metric("Total GFLOPs", f"{metrics.total_gflops:,.1f}")
 
-        # save run
         gpu_snap = nv.snapshot(gpu_index) if n_devices else None
         storage.save_run(
             test_name=None, metrics=metrics,
@@ -116,79 +217,112 @@ with tab_bench:
             passed=None, checks=None,
         )
 
-        df = pd.DataFrame([s.__dict__ for s in sampler.samples])
+        df = _samples_df(sampler)
         if not df.empty:
             st.plotly_chart(px.line(df, x="t", y="power_w", title="Power (W) during run"),
                             use_container_width=True)
             st.plotly_chart(px.line(df, x="t", y=["util_gpu", "temp_c"],
                                     title="Utilization & temperature"),
                             use_container_width=True)
+            _telemetry_download(df, key="bench")
+
+        st.divider()
+        st.subheader("Export this run")
+        _export_panel("bench")
 
 
 # ---------------------------------------------------------------------------
-# Test registry — pytest-style PASS/FAIL
+# Test registry
 # ---------------------------------------------------------------------------
 with tab_tests:
     st.header("Test registry (pytest-style)")
-    st.caption(f"Edit `{TESTS_PATH.name}` to add or change tests.")
+    st.caption(f"Defined in `{TESTS_PATH.name}`. You can override params here before running.")
 
     specs = load_tests(TESTS_PATH)
     if not specs:
         st.warning("No tests defined in tests.yaml.")
     else:
         names = [s.name for s in specs]
-        chosen = st.multiselect("Tests to run", names, default=names)
+        chosen_name = st.selectbox("Test to edit & run", names)
+        spec = next(s for s in specs if s.name == chosen_name)
+
+        st.markdown("**Override parameters for this run** (does not modify tests.yaml)")
+        p = dict(spec.params)
+        c1, c2, c3 = st.columns(3)
+        size_v = c1.number_input("size", 128, 16384,
+                                 int(p.get("size", 4096)), 128, key="t_size")
+        reps_v = c2.number_input("repetitions", 1, 1000,
+                                 int(p.get("repetitions", 10)), key="t_reps")
+        dtype_default = str(p.get("dtype", "float32"))
+        dtype_options = ["float32", "float16", "bfloat16"]
+        dtype_idx = dtype_options.index(dtype_default) if dtype_default in dtype_options else 0
+        dtype_v = c3.selectbox("dtype", dtype_options, index=dtype_idx, key="t_dtype")
+
         device = st.selectbox("Device", ["cuda", "cpu"], key="tests_device")
 
-        if st.button("Run selected tests", type="primary"):
-            results_view = []
-            for spec in specs:
-                if spec.name not in chosen:
-                    continue
-                with st.spinner(f"Running {spec.name}…"):
-                    metrics, _ = runner.run(
-                        spec.kernel, spec.params, device=device,
-                        sample_interval_s=sample_interval, gpu_index=gpu_index,
-                    )
-                passed, checks = evaluate(spec, {
-                    "gflops_per_s": metrics.gflops_per_s,
-                    "energy_j": metrics.energy_j,
-                    "energy_per_gflop": metrics.energy_per_gflop,
-                    "avg_power_w": metrics.avg_power_w,
-                    "max_temp_c": metrics.max_temp_c,
-                    "elapsed_s": metrics.elapsed_s,
-                })
-                gpu_snap = nv.snapshot(gpu_index) if n_devices else None
-                storage.save_run(
-                    test_name=spec.name, metrics=metrics,
-                    power_limit_w=gpu_snap.power_limit_w if gpu_snap else None,
-                    gpu_name=gpu_snap.name if gpu_snap else None,
-                    passed=passed, checks=checks,
+        with st.expander("Thresholds for this test"):
+            st.json(spec.thresholds or {})
+
+        if st.button("Run selected test", type="primary"):
+            params = {**p, "size": int(size_v),
+                      "repetitions": int(reps_v), "dtype": dtype_v}
+            with st.spinner(f"Running {spec.name}…"):
+                metrics, sampler = runner.run(
+                    spec.kernel, params, device=device,
+                    sample_interval_s=sample_interval, gpu_index=gpu_index,
                 )
-                results_view.append({
-                    "test": spec.name,
-                    "result": "✅ PASS" if passed else "❌ FAIL",
-                    "gflops/s": round(metrics.gflops_per_s, 1),
-                    "energy (J)": round(metrics.energy_j, 2),
-                    "J/GFLOP": round(metrics.energy_per_gflop, 4),
-                    "avg power (W)": round(metrics.avg_power_w, 1),
-                    "max temp (°C)": round(metrics.max_temp_c, 1),
-                    "elapsed (s)": round(metrics.elapsed_s, 3),
-                    "checks": "; ".join(str(c) for c in checks) or "(no thresholds)",
-                })
-            if results_view:
-                st.dataframe(pd.DataFrame(results_view), use_container_width=True)
+            passed, checks = evaluate(spec, {
+                "gflops_per_s": metrics.gflops_per_s,
+                "energy_j": metrics.energy_j,
+                "energy_per_gflop": metrics.energy_per_gflop,
+                "avg_power_w": metrics.avg_power_w,
+                "max_temp_c": metrics.max_temp_c,
+                "elapsed_s": metrics.elapsed_s,
+            })
+            _stash_last_run(f"test:{spec.name}", metrics, sampler)
+
+            gpu_snap = nv.snapshot(gpu_index) if n_devices else None
+            storage.save_run(
+                test_name=spec.name, metrics=metrics,
+                power_limit_w=gpu_snap.power_limit_w if gpu_snap else None,
+                gpu_name=gpu_snap.name if gpu_snap else None,
+                passed=passed, checks=checks,
+            )
+
+            st.subheader(f"Result: {spec.name}")
+            _render_check_panel(checks)
+
+            st.markdown("**Run metrics**")
+            mdf = pd.DataFrame([{
+                "gflops/s": round(metrics.gflops_per_s, 1),
+                "energy (J)": round(metrics.energy_j, 2),
+                "J/GFLOP": round(metrics.energy_per_gflop, 4),
+                "avg power (W)": round(metrics.avg_power_w, 1),
+                "max temp (°C)": round(metrics.max_temp_c, 1),
+                "elapsed (s)": round(metrics.elapsed_s, 3),
+            }])
+            st.dataframe(mdf, use_container_width=True)
+
+            df = _samples_df(sampler)
+            if not df.empty:
+                st.plotly_chart(px.line(df, x="t", y="power_w",
+                                        title="Power (W) during run"),
+                                use_container_width=True)
+                _telemetry_download(df, key=f"test_{spec.name}")
+
+            st.divider()
+            st.subheader("Export this run")
+            _export_panel(f"test_{spec.name}")
 
 
 # ---------------------------------------------------------------------------
-# Telemetry — standalone logger (storedata.py-style)
+# Telemetry — standalone logger
 # ---------------------------------------------------------------------------
 with tab_telemetry:
     st.header("Standalone telemetry logger")
     duration = st.number_input("Duration (s)", 1, 600, 10)
     if st.button("Sample"):
         from gpu_energy_bench.telemetry import TelemetrySampler
-        import time as _t
         sampler = TelemetrySampler(index=gpu_index, interval_s=sample_interval)
         sampler.start()
         prog = st.progress(0.0)
@@ -196,7 +330,7 @@ with tab_telemetry:
             _t.sleep(0.1)
             prog.progress((i + 1) / (duration * 10))
         sampler.stop()
-        df = pd.DataFrame([s.__dict__ for s in sampler.samples])
+        df = _samples_df(sampler)
         st.dataframe(df.tail(20), use_container_width=True)
         if not df.empty:
             st.plotly_chart(px.line(df, x="t", y=["power_w", "temp_c", "util_gpu"]),
@@ -206,7 +340,7 @@ with tab_telemetry:
 
 
 # ---------------------------------------------------------------------------
-# Power limits — read + (optionally) set
+# Power limits + sweep
 # ---------------------------------------------------------------------------
 with tab_power:
     st.header("Power limits & tuning")
@@ -227,20 +361,127 @@ with tab_power:
                                int(info["current_w"] or info["max_w"]))
         else:
             new_pl = st.number_input("New power limit (W)", 1, 1000, 200)
-        use_sudo = st.checkbox("Use sudo -n", value=False)
+        use_sudo_single = st.checkbox("Use sudo -n", value=False, key="sudo_single")
         if st.button("Apply power limit"):
-            ok, msg = nv.set_power_limit(float(new_pl), gpu_index, use_sudo=use_sudo)
+            ok, msg = nv.set_power_limit(float(new_pl), gpu_index, use_sudo=use_sudo_single)
             (st.success if ok else st.error)(msg)
 
+        # ------------------------------------------------------------
+        # Power-cap sweep
+        # ------------------------------------------------------------
+        st.divider()
+        st.subheader("⚡ Power-cap sweep")
         st.caption(
-            "💡 Energy-reduction experiment: set several power caps, run the same "
-            "test under each, then compare `time` vs `energy` and `J/GFLOP` in the "
-            "History tab."
+            "Run the same test under multiple power caps and plot time vs energy. "
+            "Requires permission to run `nvidia-smi -pl` (toggle sudo if needed)."
         )
+
+        specs = load_tests(TESTS_PATH)
+        if not specs:
+            st.warning("Define at least one test in tests.yaml to use sweep.")
+        else:
+            spec_names = [s.name for s in specs]
+            sweep_test = st.selectbox("Test", spec_names, key="sweep_test")
+            spec = next(s for s in specs if s.name == sweep_test)
+
+            min_w = int(info["min_w"] or 100)
+            max_w = int(info["max_w"] or 300)
+            cur_w = int(info["current_w"] or max_w)
+
+            colA, colB, colC = st.columns(3)
+            sweep_low = colA.number_input("Min cap (W)", min_w, max_w, min_w, key="sw_lo")
+            sweep_high = colB.number_input("Max cap (W)", min_w, max_w, max_w, key="sw_hi")
+            sweep_steps = colC.number_input("Steps", 2, 20, 4, key="sw_steps")
+
+            sweep_device = st.selectbox("Device", ["cuda", "cpu"], key="sweep_dev")
+            use_sudo_sweep = st.checkbox("Use sudo -n for nvidia-smi",
+                                         value=False, key="sudo_sweep")
+            restore_after = st.checkbox("Restore original cap when done",
+                                        value=True, key="sw_restore")
+
+            if st.button("Run power-cap sweep", type="primary"):
+                if sweep_high < sweep_low:
+                    st.error("Max cap must be >= min cap.")
+                else:
+                    caps = [int(round(sweep_low + i * (sweep_high - sweep_low) /
+                                      (sweep_steps - 1)))
+                            for i in range(int(sweep_steps))]
+                    rows = []
+                    last_sampler = None
+                    last_metrics = None
+                    prog = st.progress(0.0)
+                    status = st.empty()
+                    gpu_snap = nv.snapshot(gpu_index)
+
+                    for i, cap in enumerate(caps):
+                        status.info(f"Setting cap to {cap} W…")
+                        ok, msg = nv.set_power_limit(float(cap), gpu_index,
+                                                     use_sudo=use_sudo_sweep)
+                        if not ok:
+                            st.warning(f"Could not set cap {cap} W: {msg}. "
+                                       "Recording run anyway under current cap.")
+                        _t.sleep(1.0)  # let driver settle
+                        status.info(f"[{i+1}/{len(caps)}] Running at cap≈{cap} W…")
+                        metrics, sampler = runner.run(
+                            spec.kernel, spec.params, device=sweep_device,
+                            sample_interval_s=sample_interval, gpu_index=gpu_index,
+                        )
+                        last_sampler, last_metrics = sampler, metrics
+                        rows.append({
+                            "cap_w": cap,
+                            "elapsed_s": metrics.elapsed_s,
+                            "energy_j": metrics.energy_j,
+                            "gflops_per_s": metrics.gflops_per_s,
+                            "energy_per_gflop": metrics.energy_per_gflop,
+                            "avg_power_w": metrics.avg_power_w,
+                            "max_power_w": metrics.max_power_w,
+                            "max_temp_c": metrics.max_temp_c,
+                        })
+                        storage.save_run(
+                            test_name=f"sweep:{spec.name}", metrics=metrics,
+                            power_limit_w=cap, gpu_name=gpu_snap.name,
+                            passed=None, checks=None,
+                        )
+                        prog.progress((i + 1) / len(caps))
+
+                    if restore_after and gpu_snap.power_limit_w:
+                        nv.set_power_limit(float(gpu_snap.power_limit_w),
+                                           gpu_index, use_sudo=use_sudo_sweep)
+                        status.success(f"Sweep done. Restored cap to "
+                                       f"{int(gpu_snap.power_limit_w)} W.")
+                    else:
+                        status.success("Sweep done.")
+
+                    sdf = pd.DataFrame(rows)
+                    st.dataframe(sdf, use_container_width=True)
+
+                    st.plotly_chart(px.scatter(sdf, x="elapsed_s", y="energy_j",
+                                               text="cap_w", size="cap_w",
+                                               title="Time vs Energy across power caps"
+                                                     " (Pareto)").update_traces(
+                                                         textposition="top center"),
+                                    use_container_width=True)
+                    st.plotly_chart(px.line(sdf.sort_values("cap_w"), x="cap_w",
+                                            y=["elapsed_s", "energy_j"],
+                                            title="Cap vs time & energy"),
+                                    use_container_width=True)
+                    st.plotly_chart(px.line(sdf.sort_values("cap_w"), x="cap_w",
+                                            y="energy_per_gflop",
+                                            title="Energy per GFLOP vs cap"),
+                                    use_container_width=True)
+
+                    st.download_button("Download sweep CSV",
+                                       sdf.to_csv(index=False).encode(),
+                                       "power_sweep.csv", "text/csv")
+
+                    if last_sampler is not None and last_metrics is not None:
+                        _stash_last_run(f"sweep:{spec.name} "
+                                        f"@cap={rows[-1]['cap_w']}W",
+                                        last_metrics, last_sampler)
 
 
 # ---------------------------------------------------------------------------
-# History — compare runs across configs (the real payoff)
+# History
 # ---------------------------------------------------------------------------
 with tab_history:
     st.header("Run history & comparisons")
@@ -249,18 +490,18 @@ with tab_history:
         st.info("No runs yet.")
     else:
         st.dataframe(df, use_container_width=True, height=300)
+        st.download_button("Download full history CSV",
+                           df.to_csv(index=False).encode(),
+                           "history.csv", "text/csv")
 
         st.subheader("Plots")
-        # filter UI
         kernels_avail = sorted(df["kernel"].unique())
         kernel_pick = st.selectbox("Kernel", kernels_avail)
         sub = df[df["kernel"] == kernel_pick].copy()
 
-        # extract size if present in params (best-effort)
         def _size(p):
             try:
-                import json as _j
-                return _j.loads(p.replace("'", '"')).get("size")
+                return json.loads(p.replace("'", '"')).get("size")
             except Exception:
                 return None
         sub["size"] = sub["params"].map(_size)
@@ -292,3 +533,13 @@ with tab_history:
         if st.button("Clear history"):
             storage.clear()
             st.rerun()
+
+
+# ---------------------------------------------------------------------------
+# Export — global panel for the latest run
+# ---------------------------------------------------------------------------
+with tab_export:
+    st.header("Export latest run")
+    st.caption("Downloads metrics (CSV/JSON), telemetry CSV, and an interactive "
+               "Plotly HTML for sharing — all from the most recent benchmark or test.")
+    _export_panel("latest")
