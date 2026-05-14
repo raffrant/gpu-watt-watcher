@@ -1,0 +1,30 @@
+# Edit this file to add tests. Each test references a kernel registered in
+# kernels.py. Thresholds are all optional — omit any you don't care about.
+#
+# Available threshold keys:
+#   min_gflops_per_s, max_energy_j, max_energy_per_gflop,
+#   max_avg_power_w, max_temp_c, max_elapsed_s
+
+tests:
+  - name: matmul_small_fp32
+    kernel: matmul
+    params: { size: 1024, repetitions: 20, dtype: float32 }
+    thresholds:
+      min_gflops_per_s: 500
+      max_temp_c: 85
+
+  - name: matmul_medium_fp32
+    kernel: matmul
+    params: { size: 4096, repetitions: 10, dtype: float32 }
+    thresholds:
+      min_gflops_per_s: 2000
+      max_energy_per_gflop: 0.05    # Joules per GFLOP
+      max_temp_c: 85
+
+  - name: matmul_large_fp16
+    kernel: matmul
+    params: { size: 8192, repetitions: 5, dtype: float16 }
+    thresholds:
+      min_gflops_per_s: 5000
+      max_avg_power_w: 250
+      max_temp_c: 85
