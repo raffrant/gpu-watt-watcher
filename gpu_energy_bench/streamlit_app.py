@@ -327,24 +327,128 @@ with tab_tests:
 # Telemetry — standalone logger
 # ---------------------------------------------------------------------------
 with tab_telemetry:
-    st.header("Standalone telemetry logger")
-    duration = st.number_input("Duration (s)", 1, 600, 10)
-    if st.button("Sample"):
-        from gpu_energy_bench.telemetry import TelemetrySampler
-        sampler = TelemetrySampler(index=gpu_index, interval_s=sample_interval)
-        sampler.start()
-        prog = st.progress(0.0)
-        for i in range(int(duration * 10)):
-            _t.sleep(0.1)
-            prog.progress((i + 1) / (duration * 10))
-        sampler.stop()
-        df = _samples_df(sampler)
-        st.dataframe(df.tail(20), use_container_width=True)
-        if not df.empty:
-            st.plotly_chart(px.line(df, x="t", y=["power_w", "temp_c", "util_gpu"]),
-                            use_container_width=True)
-            csv = df.to_csv(index=False).encode()
-            st.download_button("Download telemetry CSV", csv, "telemetry.csv", "text/csv")
+    st.header("Telemetry — live & standalone")
+    from gpu_energy_bench.telemetry import TelemetrySampler
+
+    mode = st.radio("Mode", ["Standalone idle logger", "Live during benchmark"],
+                    horizontal=True, key="tel_mode")
+
+    if mode == "Standalone idle logger":
+        duration = st.number_input("Duration (s)", 1, 600, 10)
+        if st.button("Sample"):
+            sampler = TelemetrySampler(index=gpu_index, interval_s=sample_interval)
+            sampler.start()
+            chart_slot = st.empty()
+            prog = st.progress(0.0)
+            n_ticks = max(1, int(duration * 5))
+            for i in range(n_ticks):
+                _t.sleep(0.2)
+                prog.progress((i + 1) / n_ticks)
+                df_live = _samples_df(sampler)
+                if not df_live.empty:
+                    chart_slot.plotly_chart(
+                        px.line(df_live, x="t", y=["power_w", "temp_c", "util_gpu"],
+                                title="Live telemetry"),
+                        use_container_width=True, key=f"idle_live_{i}")
+            sampler.stop()
+            df = _samples_df(sampler)
+            st.dataframe(df.tail(20), use_container_width=True)
+            if not df.empty:
+                _telemetry_download(df, key="standalone")
+
+    else:
+        st.caption("Runs a kernel in a background thread and streams telemetry "
+                   "in real time. The sampler starts/stops exactly with the kernel.")
+        specs = load_tests(TESTS_PATH)
+        live_kernel = st.selectbox("Kernel",
+                                   sorted(set([s.kernel for s in specs] + ["matmul"])),
+                                   key="live_kernel")
+        c1, c2, c3 = st.columns(3)
+        l_size = c1.number_input("size", 128, 16384, 4096, 128, key="live_size")
+        l_reps = c2.number_input("repetitions", 1, 1000, 20, key="live_reps")
+        l_dtype = c3.selectbox("dtype", ["float32", "float16", "bfloat16"], key="live_dtype")
+        l_device = st.selectbox("device", ["cuda", "cpu"], key="live_device")
+
+        if st.button("▶ Run with live telemetry", type="primary"):
+            params = {"size": int(l_size), "repetitions": int(l_reps), "dtype": l_dtype}
+            sampler = TelemetrySampler(index=gpu_index, interval_s=sample_interval)
+            result_box: dict = {}
+
+            def _runner_thread():
+                try:
+                    fn = kernels.get(live_kernel)
+                    sampler.start()
+                    res = fn(device=l_device, **params)
+                    result_box["result"] = res
+                except Exception as ex:
+                    result_box["error"] = ex
+                finally:
+                    sampler.stop()
+
+            th = threading.Thread(target=_runner_thread, daemon=True)
+            th.start()
+
+            status = st.info("⏳ Running — streaming telemetry…")
+            power_slot = st.empty()
+            temp_slot = st.empty()
+            util_slot = st.empty()
+            clock_slot = st.empty()
+            metric_slot = st.empty()
+
+            tick = 0
+            while th.is_alive():
+                _t.sleep(0.25)
+                tick += 1
+                df_live = _samples_df(sampler)
+                if df_live.empty:
+                    continue
+                with metric_slot.container():
+                    mc1, mc2, mc3, mc4 = st.columns(4)
+                    mc1.metric("Samples", len(df_live))
+                    mc2.metric("Now power (W)", f"{df_live['power_w'].iloc[-1]:.1f}")
+                    mc3.metric("Peak power (W)", f"{df_live['power_w'].max():.1f}")
+                    mc4.metric("Now temp (°C)", f"{df_live['temp_c'].iloc[-1]:.1f}")
+                power_slot.plotly_chart(
+                    px.line(df_live, x="t", y="power_w", title="Power (W) — live"),
+                    use_container_width=True, key=f"lp_p_{tick}")
+                temp_slot.plotly_chart(
+                    px.line(df_live, x="t", y="temp_c", title="Temperature (°C) — live"),
+                    use_container_width=True, key=f"lp_t_{tick}")
+                util_slot.plotly_chart(
+                    px.line(df_live, x="t", y=["util_gpu", "util_mem"],
+                            title="Utilization (%) — live"),
+                    use_container_width=True, key=f"lp_u_{tick}")
+                clock_slot.plotly_chart(
+                    px.line(df_live, x="t", y="clock_sm_mhz",
+                            title="SM clock (MHz) — live"),
+                    use_container_width=True, key=f"lp_c_{tick}")
+
+            th.join()
+            if "error" in result_box:
+                status.error(f"Kernel failed: {result_box['error']}")
+            else:
+                res = result_box["result"]
+                energy_j = sampler.energy_joules()
+                status.success(
+                    f"✅ Done in {res.elapsed_s:.3f} s — "
+                    f"{res.gflops_per_s:,.1f} GFLOPs/s, energy {energy_j:,.2f} J"
+                )
+                # Build a RunMetrics-compatible record so Export works.
+                from gpu_energy_bench.runner import RunMetrics
+                total_gflops = res.flops / 1e9
+                metrics = RunMetrics(
+                    kernel=live_kernel, params=params,
+                    elapsed_s=res.elapsed_s, gflops_per_s=res.gflops_per_s,
+                    total_gflops=total_gflops, energy_j=energy_j,
+                    energy_per_gflop=(energy_j / total_gflops) if total_gflops > 0 else float("inf"),
+                    avg_power_w=sampler.avg_power_w(), max_power_w=sampler.max_power_w(),
+                    max_temp_c=sampler.max_temp_c(), avg_util_gpu=sampler.avg_util_gpu(),
+                    repetitions=res.repetitions, checksum=res.checksum, extra=res.extra,
+                )
+                _stash_last_run(f"live:{live_kernel} size={l_size} dtype={l_dtype}",
+                                metrics, sampler)
+                df_final = _samples_df(sampler)
+                _telemetry_download(df_final, key="live_run")
 
 
 # ---------------------------------------------------------------------------
