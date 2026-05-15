@@ -7,6 +7,7 @@ from __future__ import annotations
 import io
 import json
 import sys
+import threading
 import time as _t
 from dataclasses import asdict
 from pathlib import Path
@@ -151,29 +152,36 @@ tab_info, tab_bench, tab_tests, tab_telemetry, tab_power, tab_history, tab_expor
 # ---------------------------------------------------------------------------
 with tab_info:
     st.header("Live GPU snapshot")
-    if st.button("Refresh", key="refresh_info"):
-        st.rerun()
+    cA, cB = st.columns([1, 3])
+    live = cA.toggle("Live refresh", value=True, key="info_live")
+    refresh_hz = cB.slider("Refresh rate (Hz)", 1, 10, 2, key="info_hz")
+
     if n_devices == 0:
         st.warning("No CUDA GPU detected by NVML.")
     else:
-        s = nv.snapshot(gpu_index)
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("GPU", s.name)
-        c2.metric("Temp (°C)", s.temperature_c if s.temperature_c is not None else "N/A")
-        c3.metric("Power (W)", f"{s.power_w:.1f}" if s.power_w else "N/A")
-        c4.metric("Power limit (W)", f"{s.power_limit_w:.0f}" if s.power_limit_w else "N/A")
+        @st.fragment(run_every=(1.0 / refresh_hz) if live else None)
+        def _gpu_panel():
+            s = nv.snapshot(gpu_index)
+            st.caption(f"Updated at {_t.strftime('%H:%M:%S')}")
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("GPU", s.name)
+            c2.metric("Temp (°C)", s.temperature_c if s.temperature_c is not None else "N/A")
+            c3.metric("Power (W)", f"{s.power_w:.1f}" if s.power_w else "N/A")
+            c4.metric("Power limit (W)", f"{s.power_limit_w:.0f}" if s.power_limit_w else "N/A")
 
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Util GPU (%)", s.util_gpu_pct if s.util_gpu_pct is not None else "N/A")
-        c2.metric("Util mem (%)", s.util_mem_pct if s.util_mem_pct is not None else "N/A")
-        c3.metric("SM clock (MHz)", s.clock_sm_mhz if s.clock_sm_mhz is not None else "N/A")
-        c4.metric("Mem clock (MHz)", s.clock_mem_mhz if s.clock_mem_mhz is not None else "N/A")
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Util GPU (%)", s.util_gpu_pct if s.util_gpu_pct is not None else "N/A")
+            c2.metric("Util mem (%)", s.util_mem_pct if s.util_mem_pct is not None else "N/A")
+            c3.metric("SM clock (MHz)", s.clock_sm_mhz if s.clock_sm_mhz is not None else "N/A")
+            c4.metric("Mem clock (MHz)", s.clock_mem_mhz if s.clock_mem_mhz is not None else "N/A")
 
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Mem used (MB)", f"{s.mem_used_mb:.0f}" if s.mem_used_mb else "N/A")
-        c2.metric("Mem total (MB)", f"{s.mem_total_mb:.0f}" if s.mem_total_mb else "N/A")
-        c3.metric("Fan (%)", s.fan_pct if s.fan_pct is not None else "N/A")
-        c4.metric("P-state", s.pstate or "N/A")
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Mem used (MB)", f"{s.mem_used_mb:.0f}" if s.mem_used_mb else "N/A")
+            c2.metric("Mem total (MB)", f"{s.mem_total_mb:.0f}" if s.mem_total_mb else "N/A")
+            c3.metric("Fan (%)", s.fan_pct if s.fan_pct is not None else "N/A")
+            c4.metric("P-state", s.pstate or "N/A")
+
+        _gpu_panel()
 
 
 # ---------------------------------------------------------------------------
@@ -319,24 +327,128 @@ with tab_tests:
 # Telemetry — standalone logger
 # ---------------------------------------------------------------------------
 with tab_telemetry:
-    st.header("Standalone telemetry logger")
-    duration = st.number_input("Duration (s)", 1, 600, 10)
-    if st.button("Sample"):
-        from gpu_energy_bench.telemetry import TelemetrySampler
-        sampler = TelemetrySampler(index=gpu_index, interval_s=sample_interval)
-        sampler.start()
-        prog = st.progress(0.0)
-        for i in range(int(duration * 10)):
-            _t.sleep(0.1)
-            prog.progress((i + 1) / (duration * 10))
-        sampler.stop()
-        df = _samples_df(sampler)
-        st.dataframe(df.tail(20), use_container_width=True)
-        if not df.empty:
-            st.plotly_chart(px.line(df, x="t", y=["power_w", "temp_c", "util_gpu"]),
-                            use_container_width=True)
-            csv = df.to_csv(index=False).encode()
-            st.download_button("Download telemetry CSV", csv, "telemetry.csv", "text/csv")
+    st.header("Telemetry — live & standalone")
+    from gpu_energy_bench.telemetry import TelemetrySampler
+
+    mode = st.radio("Mode", ["Standalone idle logger", "Live during benchmark"],
+                    horizontal=True, key="tel_mode")
+
+    if mode == "Standalone idle logger":
+        duration = st.number_input("Duration (s)", 1, 600, 10)
+        if st.button("Sample"):
+            sampler = TelemetrySampler(index=gpu_index, interval_s=sample_interval)
+            sampler.start()
+            chart_slot = st.empty()
+            prog = st.progress(0.0)
+            n_ticks = max(1, int(duration * 5))
+            for i in range(n_ticks):
+                _t.sleep(0.2)
+                prog.progress((i + 1) / n_ticks)
+                df_live = _samples_df(sampler)
+                if not df_live.empty:
+                    chart_slot.plotly_chart(
+                        px.line(df_live, x="t", y=["power_w", "temp_c", "util_gpu"],
+                                title="Live telemetry"),
+                        use_container_width=True, key=f"idle_live_{i}")
+            sampler.stop()
+            df = _samples_df(sampler)
+            st.dataframe(df.tail(20), use_container_width=True)
+            if not df.empty:
+                _telemetry_download(df, key="standalone")
+
+    else:
+        st.caption("Runs a kernel in a background thread and streams telemetry "
+                   "in real time. The sampler starts/stops exactly with the kernel.")
+        specs = load_tests(TESTS_PATH)
+        live_kernel = st.selectbox("Kernel",
+                                   sorted(set([s.kernel for s in specs] + ["matmul"])),
+                                   key="live_kernel")
+        c1, c2, c3 = st.columns(3)
+        l_size = c1.number_input("size", 128, 16384, 4096, 128, key="live_size")
+        l_reps = c2.number_input("repetitions", 1, 1000, 20, key="live_reps")
+        l_dtype = c3.selectbox("dtype", ["float32", "float16", "bfloat16"], key="live_dtype")
+        l_device = st.selectbox("device", ["cuda", "cpu"], key="live_device")
+
+        if st.button("▶ Run with live telemetry", type="primary"):
+            params = {"size": int(l_size), "repetitions": int(l_reps), "dtype": l_dtype}
+            sampler = TelemetrySampler(index=gpu_index, interval_s=sample_interval)
+            result_box: dict = {}
+
+            def _runner_thread():
+                try:
+                    fn = kernels.get(live_kernel)
+                    sampler.start()
+                    res = fn(device=l_device, **params)
+                    result_box["result"] = res
+                except Exception as ex:
+                    result_box["error"] = ex
+                finally:
+                    sampler.stop()
+
+            th = threading.Thread(target=_runner_thread, daemon=True)
+            th.start()
+
+            status = st.info("⏳ Running — streaming telemetry…")
+            power_slot = st.empty()
+            temp_slot = st.empty()
+            util_slot = st.empty()
+            clock_slot = st.empty()
+            metric_slot = st.empty()
+
+            tick = 0
+            while th.is_alive():
+                _t.sleep(0.25)
+                tick += 1
+                df_live = _samples_df(sampler)
+                if df_live.empty:
+                    continue
+                with metric_slot.container():
+                    mc1, mc2, mc3, mc4 = st.columns(4)
+                    mc1.metric("Samples", len(df_live))
+                    mc2.metric("Now power (W)", f"{df_live['power_w'].iloc[-1]:.1f}")
+                    mc3.metric("Peak power (W)", f"{df_live['power_w'].max():.1f}")
+                    mc4.metric("Now temp (°C)", f"{df_live['temp_c'].iloc[-1]:.1f}")
+                power_slot.plotly_chart(
+                    px.line(df_live, x="t", y="power_w", title="Power (W) — live"),
+                    use_container_width=True, key=f"lp_p_{tick}")
+                temp_slot.plotly_chart(
+                    px.line(df_live, x="t", y="temp_c", title="Temperature (°C) — live"),
+                    use_container_width=True, key=f"lp_t_{tick}")
+                util_slot.plotly_chart(
+                    px.line(df_live, x="t", y=["util_gpu", "util_mem"],
+                            title="Utilization (%) — live"),
+                    use_container_width=True, key=f"lp_u_{tick}")
+                clock_slot.plotly_chart(
+                    px.line(df_live, x="t", y="clock_sm_mhz",
+                            title="SM clock (MHz) — live"),
+                    use_container_width=True, key=f"lp_c_{tick}")
+
+            th.join()
+            if "error" in result_box:
+                status.error(f"Kernel failed: {result_box['error']}")
+            else:
+                res = result_box["result"]
+                energy_j = sampler.energy_joules()
+                status.success(
+                    f"✅ Done in {res.elapsed_s:.3f} s — "
+                    f"{res.gflops_per_s:,.1f} GFLOPs/s, energy {energy_j:,.2f} J"
+                )
+                # Build a RunMetrics-compatible record so Export works.
+                from gpu_energy_bench.runner import RunMetrics
+                total_gflops = res.flops / 1e9
+                metrics = RunMetrics(
+                    kernel=live_kernel, params=params,
+                    elapsed_s=res.elapsed_s, gflops_per_s=res.gflops_per_s,
+                    total_gflops=total_gflops, energy_j=energy_j,
+                    energy_per_gflop=(energy_j / total_gflops) if total_gflops > 0 else float("inf"),
+                    avg_power_w=sampler.avg_power_w(), max_power_w=sampler.max_power_w(),
+                    max_temp_c=sampler.max_temp_c(), avg_util_gpu=sampler.avg_util_gpu(),
+                    repetitions=res.repetitions, checksum=res.checksum, extra=res.extra,
+                )
+                _stash_last_run(f"live:{live_kernel} size={l_size} dtype={l_dtype}",
+                                metrics, sampler)
+                df_final = _samples_df(sampler)
+                _telemetry_download(df_final, key="live_run")
 
 
 # ---------------------------------------------------------------------------
@@ -489,46 +601,121 @@ with tab_history:
     if df.empty:
         st.info("No runs yet.")
     else:
-        st.dataframe(df, use_container_width=True, height=300)
-        st.download_button("Download full history CSV",
-                           df.to_csv(index=False).encode(),
-                           "history.csv", "text/csv")
+        # ---- filters ----
+        st.subheader("Filters")
+        f1, f2, f3 = st.columns(3)
+        test_names = sorted([t for t in df["test_name"].dropna().unique().tolist()])
+        test_pick = f1.multiselect("Test name", test_names, default=test_names)
+        kernels_avail = sorted(df["kernel"].dropna().unique().tolist())
+        kernel_pick = f2.multiselect("Kernel", kernels_avail, default=kernels_avail)
+        params_q = f3.text_input("Params contains (substring)", "")
 
-        st.subheader("Plots")
-        kernels_avail = sorted(df["kernel"].unique())
-        kernel_pick = st.selectbox("Kernel", kernels_avail)
-        sub = df[df["kernel"] == kernel_pick].copy()
+        cap_series = df["power_limit_w"].dropna()
+        if not cap_series.empty:
+            cap_lo, cap_hi = float(cap_series.min()), float(cap_series.max())
+            if cap_lo == cap_hi:
+                cap_hi = cap_lo + 1.0
+            cap_range = st.slider("Power cap range (W)", cap_lo, cap_hi,
+                                  (cap_lo, cap_hi))
+        else:
+            cap_range = None
 
-        def _size(p):
-            try:
-                return json.loads(p.replace("'", '"')).get("size")
-            except Exception:
-                return None
-        sub["size"] = sub["params"].map(_size)
+        regr_pct = st.slider(
+            "Regression threshold (% worse than previous run of same "
+            "test+params+cap)", 1, 100, 10
+        )
 
-        c1, c2 = st.columns(2)
-        with c1:
-            st.plotly_chart(px.scatter(sub, x="size", y="gflops_per_s",
-                                       color="power_limit_w",
-                                       hover_data=["params", "test_name"],
-                                       title="GFLOPs/s vs size"),
-                            use_container_width=True)
-            st.plotly_chart(px.scatter(sub, x="size", y="energy_j",
-                                       color="power_limit_w",
-                                       hover_data=["params", "test_name"],
-                                       title="Energy (J) vs size"),
-                            use_container_width=True)
-        with c2:
-            st.plotly_chart(px.scatter(sub, x="elapsed_s", y="energy_j",
-                                       color="power_limit_w",
-                                       hover_data=["size", "params"],
-                                       title="Time vs Energy (Pareto front)"),
-                            use_container_width=True)
-            st.plotly_chart(px.scatter(sub, x="size", y="energy_per_gflop",
-                                       color="power_limit_w",
-                                       hover_data=["params"],
-                                       title="Energy per GFLOP vs size"),
-                            use_container_width=True)
+        sub = df.copy()
+        if test_pick:
+            sub = sub[sub["test_name"].isin(test_pick)]
+        if kernel_pick:
+            sub = sub[sub["kernel"].isin(kernel_pick)]
+        if params_q:
+            sub = sub[sub["params"].str.contains(params_q, case=False, na=False)]
+        if cap_range is not None:
+            sub = sub[(sub["power_limit_w"].fillna(-1) >= cap_range[0]) &
+                      (sub["power_limit_w"].fillna(-1) <= cap_range[1])]
+
+        # ---- regression detection ----
+        # Sort chronologically per (test_name, params, power_limit_w),
+        # mark a row as a regression if energy_j or elapsed_s exceeds
+        # the previous run's value by >regr_pct%.
+        sub = sub.sort_values("ts")
+        group_keys = ["test_name", "params", "power_limit_w"]
+        sub["prev_energy_j"] = sub.groupby(group_keys)["energy_j"].shift(1)
+        sub["prev_elapsed_s"] = sub.groupby(group_keys)["elapsed_s"].shift(1)
+        thr = 1 + regr_pct / 100.0
+        sub["energy_regression"] = (
+            sub["prev_energy_j"].notna() & (sub["energy_j"] > sub["prev_energy_j"] * thr)
+        )
+        sub["time_regression"] = (
+            sub["prev_elapsed_s"].notna() & (sub["elapsed_s"] > sub["prev_elapsed_s"] * thr)
+        )
+        sub["regression"] = sub["energy_regression"] | sub["time_regression"]
+        sub = sub.sort_values("ts", ascending=False)
+
+        n_regr = int(sub["regression"].sum())
+        if n_regr:
+            st.error(f"⚠️ {n_regr} regression(s) detected (>{regr_pct}% worse "
+                     "than previous comparable run).")
+        else:
+            st.success("✅ No regressions in the filtered runs.")
+
+        st.subheader(f"Filtered runs ({len(sub)})")
+
+        def _row_style(row):
+            if row.get("regression"):
+                return ["background-color: rgba(220, 38, 38, 0.18)"] * len(row)
+            if row.get("passed") == 0:
+                return ["background-color: rgba(234, 179, 8, 0.18)"] * len(row)
+            return [""] * len(row)
+
+        display_cols = [
+            "ts", "test_name", "kernel", "params", "power_limit_w",
+            "elapsed_s", "energy_j", "energy_per_gflop", "gflops_per_s",
+            "avg_power_w", "max_temp_c", "passed",
+            "prev_energy_j", "prev_elapsed_s", "regression",
+        ]
+        display_cols = [c for c in display_cols if c in sub.columns]
+        styled = sub[display_cols].style.apply(_row_style, axis=1)
+        st.dataframe(styled, use_container_width=True, height=320)
+        st.download_button("Download filtered history CSV",
+                           sub.to_csv(index=False).encode(),
+                           "history_filtered.csv", "text/csv")
+
+        # ---- comparison plots ----
+        st.subheader("Energy vs time across filtered runs")
+        if not sub.empty:
+            sub["size"] = sub["params"].map(lambda p: (
+                json.loads(p.replace("'", '"')).get("size")
+                if isinstance(p, str) else None
+            ) if p else None)
+
+            c1, c2 = st.columns(2)
+            with c1:
+                st.plotly_chart(
+                    px.scatter(sub, x="elapsed_s", y="energy_j",
+                               color="power_limit_w", symbol="regression",
+                               hover_data=["test_name", "params", "ts"],
+                               title="Time vs Energy (Pareto — × = regression)"),
+                    use_container_width=True)
+                st.plotly_chart(
+                    px.scatter(sub, x="size", y="gflops_per_s",
+                               color="power_limit_w",
+                               hover_data=["test_name", "params"],
+                               title="GFLOPs/s vs size"),
+                    use_container_width=True)
+            with c2:
+                st.plotly_chart(
+                    px.line(sub.sort_values("ts"), x="ts", y="energy_j",
+                            color="test_name",
+                            title="Energy (J) over time per test"),
+                    use_container_width=True)
+                st.plotly_chart(
+                    px.line(sub.sort_values("ts"), x="ts", y="elapsed_s",
+                            color="test_name",
+                            title="Elapsed (s) over time per test"),
+                    use_container_width=True)
 
         if st.button("Clear history"):
             storage.clear()
