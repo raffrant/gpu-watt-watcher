@@ -218,14 +218,13 @@ with tab_bench:
         m4.metric("Total GFLOPs", f"{metrics.total_gflops:,.1f}")
 
         gpu_snap = nv.snapshot(gpu_index) if n_devices else None
+        df = _samples_df(sampler)
         storage.save_run(
             test_name=None, metrics=metrics,
             power_limit_w=gpu_snap.power_limit_w if gpu_snap else None,
             gpu_name=gpu_snap.name if gpu_snap else None,
-            passed=None, checks=None,
+            passed=None, checks=None, samples_df=df,
         )
-
-        df = _samples_df(sampler)
         if not df.empty:
             st.plotly_chart(px.line(df, x="t", y="power_w", title="Power (W) during run"),
                             use_container_width=True)
