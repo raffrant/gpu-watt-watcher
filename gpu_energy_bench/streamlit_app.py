@@ -601,46 +601,123 @@ with tab_history:
     if df.empty:
         st.info("No runs yet.")
     else:
-        st.dataframe(df, use_container_width=True, height=300)
-        st.download_button("Download full history CSV",
-                           df.to_csv(index=False).encode(),
-                           "history.csv", "text/csv")
+        # ---- filters ----
+        st.subheader("Filters")
+        f1, f2, f3 = st.columns(3)
+        test_names = sorted([t for t in df["test_name"].dropna().unique().tolist()])
+        test_pick = f1.multiselect("Test name", test_names, default=test_names)
+        kernels_avail = sorted(df["kernel"].dropna().unique().tolist())
+        kernel_pick = f2.multiselect("Kernel", kernels_avail, default=kernels_avail)
+        params_q = f3.text_input("Params contains (substring)", "")
 
-        st.subheader("Plots")
-        kernels_avail = sorted(df["kernel"].unique())
-        kernel_pick = st.selectbox("Kernel", kernels_avail)
-        sub = df[df["kernel"] == kernel_pick].copy()
+        cap_series = df["power_limit_w"].dropna()
+        if not cap_series.empty:
+            cap_lo, cap_hi = float(cap_series.min()), float(cap_series.max())
+            if cap_lo == cap_hi:
+                cap_hi = cap_lo + 1.0
+            cap_range = st.slider("Power cap range (W)", cap_lo, cap_hi,
+                                  (cap_lo, cap_hi))
+        else:
+            cap_range = None
 
-        def _size(p):
-            try:
-                return json.loads(p.replace("'", '"')).get("size")
-            except Exception:
-                return None
-        sub["size"] = sub["params"].map(_size)
+        regr_pct = st.slider(
+            "Regression threshold (% worse than previous run of same "
+            "test+params+cap)", 1, 100, 10
+        )
 
-        c1, c2 = st.columns(2)
-        with c1:
-            st.plotly_chart(px.scatter(sub, x="size", y="gflops_per_s",
-                                       color="power_limit_w",
-                                       hover_data=["params", "test_name"],
-                                       title="GFLOPs/s vs size"),
-                            use_container_width=True)
-            st.plotly_chart(px.scatter(sub, x="size", y="energy_j",
-                                       color="power_limit_w",
-                                       hover_data=["params", "test_name"],
-                                       title="Energy (J) vs size"),
-                            use_container_width=True)
-        with c2:
-            st.plotly_chart(px.scatter(sub, x="elapsed_s", y="energy_j",
-                                       color="power_limit_w",
-                                       hover_data=["size", "params"],
-                                       title="Time vs Energy (Pareto front)"),
-                            use_container_width=True)
-            st.plotly_chart(px.scatter(sub, x="size", y="energy_per_gflop",
-                                       color="power_limit_w",
-                                       hover_data=["params"],
-                                       title="Energy per GFLOP vs size"),
-                            use_container_width=True)
+        sub = df.copy()
+        if test_pick:
+            sub = sub[sub["test_name"].isin(test_pick) | sub["test_name"].isna()
+                      if len(test_pick) == len(test_names)
+                      else sub["test_name"].isin(test_pick)]
+        if kernel_pick:
+            sub = sub[sub["kernel"].isin(kernel_pick)]
+        if params_q:
+            sub = sub[sub["params"].str.contains(params_q, case=False, na=False)]
+        if cap_range is not None:
+            sub = sub[(sub["power_limit_w"].fillna(-1) >= cap_range[0]) &
+                      (sub["power_limit_w"].fillna(-1) <= cap_range[1])]
+
+        # ---- regression detection ----
+        # Sort chronologically per (test_name, params, power_limit_w),
+        # mark a row as a regression if energy_j or elapsed_s exceeds
+        # the previous run's value by >regr_pct%.
+        sub = sub.sort_values("ts")
+        group_keys = ["test_name", "params", "power_limit_w"]
+        sub["prev_energy_j"] = sub.groupby(group_keys)["energy_j"].shift(1)
+        sub["prev_elapsed_s"] = sub.groupby(group_keys)["elapsed_s"].shift(1)
+        thr = 1 + regr_pct / 100.0
+        sub["energy_regression"] = (
+            sub["prev_energy_j"].notna() & (sub["energy_j"] > sub["prev_energy_j"] * thr)
+        )
+        sub["time_regression"] = (
+            sub["prev_elapsed_s"].notna() & (sub["elapsed_s"] > sub["prev_elapsed_s"] * thr)
+        )
+        sub["regression"] = sub["energy_regression"] | sub["time_regression"]
+        sub = sub.sort_values("ts", ascending=False)
+
+        n_regr = int(sub["regression"].sum())
+        if n_regr:
+            st.error(f"⚠️ {n_regr} regression(s) detected (>{regr_pct}% worse "
+                     "than previous comparable run).")
+        else:
+            st.success("✅ No regressions in the filtered runs.")
+
+        st.subheader(f"Filtered runs ({len(sub)})")
+
+        def _row_style(row):
+            if row.get("regression"):
+                return ["background-color: rgba(220, 38, 38, 0.18)"] * len(row)
+            if row.get("passed") == 0:
+                return ["background-color: rgba(234, 179, 8, 0.18)"] * len(row)
+            return [""] * len(row)
+
+        display_cols = [
+            "ts", "test_name", "kernel", "params", "power_limit_w",
+            "elapsed_s", "energy_j", "energy_per_gflop", "gflops_per_s",
+            "avg_power_w", "max_temp_c", "passed",
+            "prev_energy_j", "prev_elapsed_s", "regression",
+        ]
+        display_cols = [c for c in display_cols if c in sub.columns]
+        styled = sub[display_cols].style.apply(_row_style, axis=1)
+        st.dataframe(styled, use_container_width=True, height=320)
+        st.download_button("Download filtered history CSV",
+                           sub.to_csv(index=False).encode(),
+                           "history_filtered.csv", "text/csv")
+
+        # ---- comparison plots ----
+        st.subheader("Energy vs time across filtered runs")
+        if not sub.empty:
+            sub["size"] = sub["params"].map(lambda p: (
+                json.loads(p.replace("'", '"')).get("size")
+                if isinstance(p, str) else None
+            ) if p else None)
+
+            c1, c2 = st.columns(2)
+            with c1:
+                st.plotly_chart(
+                    px.scatter(sub, x="elapsed_s", y="energy_j",
+                               color="power_limit_w", symbol="regression",
+                               hover_data=["test_name", "params", "ts"],
+                               title="Time vs Energy (Pareto — × = regression)"),
+                    use_container_width=True)
+                st.plotly_chart(
+                    px.scatter(sub, x="size", y="gflops_per_s",
+                               color="power_limit_w",
+                               hover_data=["test_name", "params"],
+                               title="GFLOPs/s vs size"),
+                    use_container_width=True)
+            with c2:
+                st.plotly_chart(
+                    px.line(sub.sort_values("ts"), x="ts", y="energy_j",
+                            color="test_name",
+                            title="Energy (J) over time per test"),
+                    use_container_width=True)
+                st.plotly_chart(
+                    px.line(sub.sort_values("ts"), x="ts", y="elapsed_s",
+                            color="test_name",
+                            title="Elapsed (s) over time per test"),
+                    use_container_width=True)
 
         if st.button("Clear history"):
             storage.clear()
