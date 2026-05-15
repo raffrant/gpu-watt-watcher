@@ -627,9 +627,7 @@ with tab_history:
 
         sub = df.copy()
         if test_pick:
-            sub = sub[sub["test_name"].isin(test_pick) | sub["test_name"].isna()
-                      if len(test_pick) == len(test_names)
-                      else sub["test_name"].isin(test_pick)]
+            sub = sub[sub["test_name"].isin(test_pick)]
         if kernel_pick:
             sub = sub[sub["kernel"].isin(kernel_pick)]
         if params_q:
