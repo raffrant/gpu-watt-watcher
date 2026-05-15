@@ -293,7 +293,7 @@ with tab_tests:
                 test_name=spec.name, metrics=metrics,
                 power_limit_w=gpu_snap.power_limit_w if gpu_snap else None,
                 gpu_name=gpu_snap.name if gpu_snap else None,
-                passed=passed, checks=checks,
+                passed=passed, checks=checks, samples_df=_samples_df(sampler),
             )
 
             st.subheader(f"Result: {spec.name}")
