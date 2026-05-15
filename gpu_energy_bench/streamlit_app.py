@@ -152,29 +152,36 @@ tab_info, tab_bench, tab_tests, tab_telemetry, tab_power, tab_history, tab_expor
 # ---------------------------------------------------------------------------
 with tab_info:
     st.header("Live GPU snapshot")
-    if st.button("Refresh", key="refresh_info"):
-        st.rerun()
+    cA, cB = st.columns([1, 3])
+    live = cA.toggle("Live refresh", value=True, key="info_live")
+    refresh_hz = cB.slider("Refresh rate (Hz)", 1, 10, 2, key="info_hz")
+
     if n_devices == 0:
         st.warning("No CUDA GPU detected by NVML.")
     else:
-        s = nv.snapshot(gpu_index)
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("GPU", s.name)
-        c2.metric("Temp (°C)", s.temperature_c if s.temperature_c is not None else "N/A")
-        c3.metric("Power (W)", f"{s.power_w:.1f}" if s.power_w else "N/A")
-        c4.metric("Power limit (W)", f"{s.power_limit_w:.0f}" if s.power_limit_w else "N/A")
+        @st.fragment(run_every=(1.0 / refresh_hz) if live else None)
+        def _gpu_panel():
+            s = nv.snapshot(gpu_index)
+            st.caption(f"Updated at {_t.strftime('%H:%M:%S')}")
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("GPU", s.name)
+            c2.metric("Temp (°C)", s.temperature_c if s.temperature_c is not None else "N/A")
+            c3.metric("Power (W)", f"{s.power_w:.1f}" if s.power_w else "N/A")
+            c4.metric("Power limit (W)", f"{s.power_limit_w:.0f}" if s.power_limit_w else "N/A")
 
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Util GPU (%)", s.util_gpu_pct if s.util_gpu_pct is not None else "N/A")
-        c2.metric("Util mem (%)", s.util_mem_pct if s.util_mem_pct is not None else "N/A")
-        c3.metric("SM clock (MHz)", s.clock_sm_mhz if s.clock_sm_mhz is not None else "N/A")
-        c4.metric("Mem clock (MHz)", s.clock_mem_mhz if s.clock_mem_mhz is not None else "N/A")
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Util GPU (%)", s.util_gpu_pct if s.util_gpu_pct is not None else "N/A")
+            c2.metric("Util mem (%)", s.util_mem_pct if s.util_mem_pct is not None else "N/A")
+            c3.metric("SM clock (MHz)", s.clock_sm_mhz if s.clock_sm_mhz is not None else "N/A")
+            c4.metric("Mem clock (MHz)", s.clock_mem_mhz if s.clock_mem_mhz is not None else "N/A")
 
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Mem used (MB)", f"{s.mem_used_mb:.0f}" if s.mem_used_mb else "N/A")
-        c2.metric("Mem total (MB)", f"{s.mem_total_mb:.0f}" if s.mem_total_mb else "N/A")
-        c3.metric("Fan (%)", s.fan_pct if s.fan_pct is not None else "N/A")
-        c4.metric("P-state", s.pstate or "N/A")
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Mem used (MB)", f"{s.mem_used_mb:.0f}" if s.mem_used_mb else "N/A")
+            c2.metric("Mem total (MB)", f"{s.mem_total_mb:.0f}" if s.mem_total_mb else "N/A")
+            c3.metric("Fan (%)", s.fan_pct if s.fan_pct is not None else "N/A")
+            c4.metric("P-state", s.pstate or "N/A")
+
+        _gpu_panel()
 
 
 # ---------------------------------------------------------------------------
