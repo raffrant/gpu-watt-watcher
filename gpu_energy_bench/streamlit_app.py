@@ -552,6 +552,7 @@ with tab_power:
                             test_name=f"sweep:{spec.name}", metrics=metrics,
                             power_limit_w=cap, gpu_name=gpu_snap.name,
                             passed=None, checks=None,
+                            samples_df=_samples_df(sampler),
                         )
                         prog.progress((i + 1) / len(caps))
 
