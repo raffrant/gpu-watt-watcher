@@ -662,6 +662,7 @@ with tab_history:
             st.success("✅ No regressions in the filtered runs.")
 
         st.subheader(f"Filtered runs ({len(sub)})")
+        st.caption("👉 Click a row to open that run with its saved telemetry plots.")
 
         def _row_style(row):
             if row.get("regression"):
@@ -671,17 +672,103 @@ with tab_history:
             return [""] * len(row)
 
         display_cols = [
-            "ts", "test_name", "kernel", "params", "power_limit_w",
+            "id", "ts", "test_name", "kernel", "params", "power_limit_w",
             "elapsed_s", "energy_j", "energy_per_gflop", "gflops_per_s",
             "avg_power_w", "max_temp_c", "passed",
             "prev_energy_j", "prev_elapsed_s", "regression",
         ]
         display_cols = [c for c in display_cols if c in sub.columns]
-        styled = sub[display_cols].style.apply(_row_style, axis=1)
-        st.dataframe(styled, use_container_width=True, height=320)
+        sub_display = sub[display_cols].reset_index(drop=True)
+        styled = sub_display.style.apply(_row_style, axis=1)
+        selection = st.dataframe(
+            styled, use_container_width=True, height=320,
+            on_select="rerun", selection_mode="single-row",
+            key="history_table",
+        )
         st.download_button("Download filtered history CSV",
                            sub.to_csv(index=False).encode(),
                            "history_filtered.csv", "text/csv")
+
+        # ---- clickable run detail ----
+        selected_rows = []
+        try:
+            selected_rows = selection.selection.rows  # type: ignore[attr-defined]
+        except Exception:
+            selected_rows = []
+
+        if selected_rows:
+            row_idx = selected_rows[0]
+            run_id = int(sub_display.iloc[row_idx]["id"])
+            run = storage.load_run(run_id)
+            st.divider()
+            st.subheader(f"📂 Run #{run_id} — {run.get('test_name') or run.get('kernel')}")
+            meta_c1, meta_c2, meta_c3, meta_c4 = st.columns(4)
+            meta_c1.caption(f"**Kernel:** `{run.get('kernel')}`")
+            meta_c2.caption(f"**Params:** `{run.get('params')}`")
+            meta_c3.caption(
+                f"**Power cap:** "
+                f"{int(run['power_limit_w']) if run.get('power_limit_w') else 'n/a'} W"
+            )
+            meta_c4.caption(
+                f"**When:** "
+                f"{_t.strftime('%Y-%m-%d %H:%M:%S', _t.localtime(run['ts']))}"
+            )
+
+            k1, k2, k3, k4 = st.columns(4)
+            k1.metric("Elapsed (s)", f"{(run.get('elapsed_s') or 0):.3f}")
+            k2.metric("Energy (J)", f"{(run.get('energy_j') or 0):.2f}")
+            k3.metric("J/GFLOP", f"{(run.get('energy_per_gflop') or 0):.4f}")
+            k4.metric("GFLOPs/s", f"{(run.get('gflops_per_s') or 0):,.1f}")
+
+            k1, k2, k3, k4 = st.columns(4)
+            k1.metric("Avg power (W)", f"{(run.get('avg_power_w') or 0):.1f}")
+            k2.metric("Max power (W)", f"{(run.get('max_power_w') or 0):.1f}")
+            k3.metric("Max temp (°C)", f"{(run.get('max_temp_c') or 0):.1f}")
+            k4.metric("Avg util (%)", f"{(run.get('avg_util_gpu') or 0):.1f}")
+
+            checks_list = run.get("checks_list") or []
+            if checks_list:
+                with st.expander(f"Thresholds ({len(checks_list)})", expanded=True):
+                    for c in checks_list:
+                        ok = c.get("passed")
+                        line = (f"**{c.get('name')}** — actual `{c.get('actual')}` "
+                                f"{c.get('op')} threshold `{c.get('threshold')}`")
+                        (st.success if ok else st.error)(("✅ " if ok else "❌ ") + line)
+
+            tdf = run.get("telemetry_df")
+            if tdf is None or tdf.empty:
+                st.info("No telemetry was saved for this run.")
+            else:
+                st.markdown("**Saved telemetry**")
+                tc1, tc2 = st.columns(2)
+                with tc1:
+                    st.plotly_chart(px.line(tdf, x="t", y="power_w",
+                                            title="Power (W)"),
+                                    use_container_width=True,
+                                    key=f"hist_pw_{run_id}")
+                    st.plotly_chart(px.line(tdf, x="t", y="temp_c",
+                                            title="Temperature (°C)"),
+                                    use_container_width=True,
+                                    key=f"hist_tc_{run_id}")
+                with tc2:
+                    util_cols = [c for c in ("util_gpu", "util_mem") if c in tdf.columns]
+                    if util_cols:
+                        st.plotly_chart(px.line(tdf, x="t", y=util_cols,
+                                                title="Utilization (%)"),
+                                        use_container_width=True,
+                                        key=f"hist_ut_{run_id}")
+                    clock_cols = [c for c in ("clock_sm_mhz", "clock_mem_mhz")
+                                  if c in tdf.columns]
+                    if clock_cols:
+                        st.plotly_chart(px.line(tdf, x="t", y=clock_cols,
+                                                title="Clocks (MHz)"),
+                                        use_container_width=True,
+                                        key=f"hist_ck_{run_id}")
+                st.download_button(
+                    "Download this run's telemetry CSV",
+                    tdf.to_csv(index=False).encode(),
+                    f"telemetry_run_{run_id}.csv", "text/csv",
+                    key=f"dl_hist_tel_{run_id}")
 
         # ---- comparison plots ----
         st.subheader("Energy vs time across filtered runs")
