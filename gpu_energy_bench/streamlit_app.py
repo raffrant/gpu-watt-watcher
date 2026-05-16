@@ -151,14 +151,73 @@ tab_info, tab_bench, tab_tests, tab_telemetry, tab_power, tab_history, tab_expor
 # GPU info
 # ---------------------------------------------------------------------------
 with tab_info:
-    st.header("Live GPU snapshot")
-    cA, cB = st.columns([1, 3])
-    live = cA.toggle("Live refresh", value=True, key="info_live")
-    refresh_hz = cB.slider("Refresh rate (Hz)", 1, 10, 2, key="info_hz")
+    st.header("Identify & test your NVIDIA GPUs")
+
+    # ---- system-level identifiers --------------------------------------
+    sys_c1, sys_c2, sys_c3 = st.columns(3)
+    sys_c1.metric("NVML devices", n_devices)
+    sys_c2.metric("Driver", nv.driver_version() or "N/A")
+    sys_c3.metric("CUDA (driver)", nv.cuda_driver_version() or "N/A")
 
     if n_devices == 0:
         st.warning("No CUDA GPU detected by NVML.")
     else:
+        # ---- identification table for every visible GPU ----------------
+        st.subheader("All detected GPUs")
+        ids = nv.identify_all()
+        st.dataframe(pd.DataFrame(ids), use_container_width=True, hide_index=True)
+        st.caption("Use the **GPU index** in the sidebar to target a specific card "
+                   "for benchmarks, telemetry, and power-cap sweeps.")
+
+        # ---- identity card for the currently selected GPU --------------
+        st.subheader(f"Selected GPU #{gpu_index}")
+        me = nv.identify(gpu_index)
+        idc1, idc2, idc3 = st.columns(3)
+        idc1.markdown(f"**Name**\n\n`{me['name']}`")
+        idc1.markdown(f"**Architecture**\n\n`{me['architecture'] or 'N/A'}`")
+        idc2.markdown(f"**Compute capability**\n\n`{me['compute_capability'] or 'N/A'}`")
+        idc2.markdown(f"**VRAM (MB)**\n\n`{int(me['mem_total_mb']) if me['mem_total_mb'] else 'N/A'}`")
+        idc3.markdown(f"**PCI bus**\n\n`{me['pci_bus_id'] or 'N/A'}`")
+        idc3.markdown(f"**VBIOS**\n\n`{me['vbios'] or 'N/A'}`")
+        st.caption(f"**UUID:** `{me['uuid'] or 'N/A'}` · "
+                   f"**Serial:** `{me['serial'] or 'N/A'}`")
+
+        # ---- quick smoke test ------------------------------------------
+        st.subheader("Quick test")
+        st.caption("Runs a small matmul + telemetry so you can verify this GPU "
+                   "is reachable and producing sane numbers before designing a real test.")
+        qc1, qc2, qc3 = st.columns(3)
+        q_size = qc1.selectbox("Size", [1024, 2048, 4096, 8192], index=1, key="quick_size")
+        q_dtype = qc2.selectbox("dtype", ["float32", "float16", "bfloat16"], key="quick_dtype")
+        q_reps = qc3.number_input("Repetitions", 1, 200, 5, key="quick_reps")
+
+        if st.button("▶ Run quick test on this GPU", key="quick_run"):
+            with st.spinner(f"Running matmul on GPU #{gpu_index}…"):
+                metrics, sampler = runner.run(
+                    "matmul",
+                    {"size": int(q_size), "repetitions": int(q_reps), "dtype": q_dtype},
+                    device="cuda", sample_interval_s=sample_interval, gpu_index=gpu_index,
+                )
+            st.success(f"✅ GPU #{gpu_index} ({me['name']}) responded in "
+                       f"{metrics.elapsed_s:.3f} s")
+            qm1, qm2, qm3, qm4 = st.columns(4)
+            qm1.metric("GFLOPs/s", f"{metrics.gflops_per_s:,.1f}")
+            qm2.metric("Energy (J)", f"{metrics.energy_j:,.2f}")
+            qm3.metric("Avg power (W)", f"{metrics.avg_power_w:,.1f}")
+            qm4.metric("Max temp (°C)", f"{metrics.max_temp_c:.1f}")
+            _stash_last_run(
+                f"quick test GPU#{gpu_index} size={q_size} dtype={q_dtype}",
+                metrics, sampler,
+            )
+
+        st.divider()
+
+        # ---- live telemetry panel --------------------------------------
+        st.subheader("Live snapshot")
+        cA, cB = st.columns([1, 3])
+        live = cA.toggle("Live refresh", value=True, key="info_live")
+        refresh_hz = cB.slider("Refresh rate (Hz)", 1, 10, 2, key="info_hz")
+
         @st.fragment(run_every=(1.0 / refresh_hz) if live else None)
         def _gpu_panel():
             s = nv.snapshot(gpu_index)
@@ -740,30 +799,43 @@ with tab_history:
                 st.info("No telemetry was saved for this run.")
             else:
                 st.markdown("**Saved telemetry**")
-                tc1, tc2 = st.columns(2)
-                with tc1:
-                    st.plotly_chart(px.line(tdf, x="t", y="power_w",
-                                            title="Power (W)"),
-                                    use_container_width=True,
-                                    key=f"hist_pw_{run_id}")
-                    st.plotly_chart(px.line(tdf, x="t", y="temp_c",
-                                            title="Temperature (°C)"),
-                                    use_container_width=True,
-                                    key=f"hist_tc_{run_id}")
-                with tc2:
-                    util_cols = [c for c in ("util_gpu", "util_mem") if c in tdf.columns]
-                    if util_cols:
-                        st.plotly_chart(px.line(tdf, x="t", y=util_cols,
-                                                title="Utilization (%)"),
-                                        use_container_width=True,
-                                        key=f"hist_ut_{run_id}")
-                    clock_cols = [c for c in ("clock_sm_mhz", "clock_mem_mhz")
-                                  if c in tdf.columns]
-                    if clock_cols:
-                        st.plotly_chart(px.line(tdf, x="t", y=clock_cols,
-                                                title="Clocks (MHz)"),
-                                        use_container_width=True,
-                                        key=f"hist_ck_{run_id}")
+
+                # All numeric columns except the time axis are pickable.
+                plottable = [c for c in tdf.columns
+                             if c != "t" and pd.api.types.is_numeric_dtype(tdf[c])]
+                default_pick = [c for c in
+                                ("power_w", "temp_c", "util_gpu", "clock_sm_mhz")
+                                if c in plottable]
+                picked = st.multiselect(
+                    "Metrics to plot",
+                    plottable,
+                    default=default_pick or plottable[:1],
+                    key=f"hist_metric_pick_{run_id}",
+                    help="Choose which telemetry channels to chart for this run.",
+                )
+                combined = st.checkbox(
+                    "Overlay on one chart",
+                    value=False, key=f"hist_metric_combined_{run_id}",
+                    help="Off = one chart per metric. On = single chart, shared y-axis.",
+                )
+
+                if not picked:
+                    st.caption("Pick at least one metric to render plots.")
+                elif combined:
+                    st.plotly_chart(
+                        px.line(tdf, x="t", y=picked,
+                                title="Selected telemetry"),
+                        use_container_width=True,
+                        key=f"hist_combined_{run_id}")
+                else:
+                    cols = st.columns(2)
+                    for i, metric in enumerate(picked):
+                        with cols[i % 2]:
+                            st.plotly_chart(
+                                px.line(tdf, x="t", y=metric, title=metric),
+                                use_container_width=True,
+                                key=f"hist_metric_{run_id}_{metric}")
+
                 st.download_button(
                     "Download this run's telemetry CSV",
                     tdf.to_csv(index=False).encode(),
