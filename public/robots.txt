@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://gpu-watt-watcher.lovable.app/sitemap.xml
