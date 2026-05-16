@@ -799,30 +799,43 @@ with tab_history:
                 st.info("No telemetry was saved for this run.")
             else:
                 st.markdown("**Saved telemetry**")
-                tc1, tc2 = st.columns(2)
-                with tc1:
-                    st.plotly_chart(px.line(tdf, x="t", y="power_w",
-                                            title="Power (W)"),
-                                    use_container_width=True,
-                                    key=f"hist_pw_{run_id}")
-                    st.plotly_chart(px.line(tdf, x="t", y="temp_c",
-                                            title="Temperature (°C)"),
-                                    use_container_width=True,
-                                    key=f"hist_tc_{run_id}")
-                with tc2:
-                    util_cols = [c for c in ("util_gpu", "util_mem") if c in tdf.columns]
-                    if util_cols:
-                        st.plotly_chart(px.line(tdf, x="t", y=util_cols,
-                                                title="Utilization (%)"),
-                                        use_container_width=True,
-                                        key=f"hist_ut_{run_id}")
-                    clock_cols = [c for c in ("clock_sm_mhz", "clock_mem_mhz")
-                                  if c in tdf.columns]
-                    if clock_cols:
-                        st.plotly_chart(px.line(tdf, x="t", y=clock_cols,
-                                                title="Clocks (MHz)"),
-                                        use_container_width=True,
-                                        key=f"hist_ck_{run_id}")
+
+                # All numeric columns except the time axis are pickable.
+                plottable = [c for c in tdf.columns
+                             if c != "t" and pd.api.types.is_numeric_dtype(tdf[c])]
+                default_pick = [c for c in
+                                ("power_w", "temp_c", "util_gpu", "clock_sm_mhz")
+                                if c in plottable]
+                picked = st.multiselect(
+                    "Metrics to plot",
+                    plottable,
+                    default=default_pick or plottable[:1],
+                    key=f"hist_metric_pick_{run_id}",
+                    help="Choose which telemetry channels to chart for this run.",
+                )
+                combined = st.checkbox(
+                    "Overlay on one chart",
+                    value=False, key=f"hist_metric_combined_{run_id}",
+                    help="Off = one chart per metric. On = single chart, shared y-axis.",
+                )
+
+                if not picked:
+                    st.caption("Pick at least one metric to render plots.")
+                elif combined:
+                    st.plotly_chart(
+                        px.line(tdf, x="t", y=picked,
+                                title="Selected telemetry"),
+                        use_container_width=True,
+                        key=f"hist_combined_{run_id}")
+                else:
+                    cols = st.columns(2)
+                    for i, metric in enumerate(picked):
+                        with cols[i % 2]:
+                            st.plotly_chart(
+                                px.line(tdf, x="t", y=metric, title=metric),
+                                use_container_width=True,
+                                key=f"hist_metric_{run_id}_{metric}")
+
                 st.download_button(
                     "Download this run's telemetry CSV",
                     tdf.to_csv(index=False).encode(),
