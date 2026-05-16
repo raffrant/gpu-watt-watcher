@@ -25,12 +25,36 @@ export const Route = createFileRoute("/")({
       {
         name: "description",
         content:
-          "A Streamlit test bench that measures GPU energy and performance for reproducible kernels — with thresholds, power-cap sweeps, telemetry export, and pytest-style PASS/FAIL.",
+          "Streamlit bench measuring NVIDIA GPU energy with thresholds, power-cap sweeps, telemetry, and PASS/FAIL tests.",
       },
-      { property: "og:title", content: "GPU Energy Bench" },
+      {
+        property: "og:title",
+        content: "GPU Energy Bench — pytest for GPU energy",
+      },
       {
         property: "og:description",
         content: "Pytest for GPU energy — measure, test, and reduce GPU power.",
+      },
+      { property: "og:url", content: "https://gpu-watt-watcher.lovable.app/" },
+      { property: "og:type", content: "website" },
+    ],
+    links: [
+      { rel: "canonical", href: "https://gpu-watt-watcher.lovable.app/" },
+    ],
+    scripts: [
+      {
+        type: "application/ld+json",
+        children: JSON.stringify({
+          "@context": "https://schema.org",
+          "@type": "SoftwareApplication",
+          name: "GPU Energy Bench",
+          applicationCategory: "DeveloperApplication",
+          operatingSystem: "Linux, Windows",
+          description:
+            "A pytest-style Streamlit bench for measuring NVIDIA GPU energy and performance with reproducible kernels, threshold-based PASS/FAIL tests, power-cap sweeps, and telemetry export.",
+          url: "https://gpu-watt-watcher.lovable.app/",
+          offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
+        }),
       },
     ],
   }),
