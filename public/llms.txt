@@ -1,0 +1,7 @@
+# GPU Energy Bench
+
+> Pytest-style Streamlit bench for measuring NVIDIA GPU energy and performance with reproducible kernels, PASS/FAIL thresholds, power-cap sweeps, and telemetry export.
+
+## Pages
+
+- [Home](/): Overview, quickstart, features, and example output for the GPU Energy Bench tool.
