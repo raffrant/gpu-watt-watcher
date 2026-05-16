@@ -88,6 +88,12 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
+      { name: "twitter:title", content: "GPU Energy Bench — pytest for GPU energy" },
+      { name: "description", content: "GPU Energy Lab is a Streamlit app for benchmarking GPU energy efficiency and performance." },
+      { property: "og:description", content: "GPU Energy Lab is a Streamlit app for benchmarking GPU energy efficiency and performance." },
+      { name: "twitter:description", content: "GPU Energy Lab is a Streamlit app for benchmarking GPU energy efficiency and performance." },
+      { property: "og:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/b8825e3a-868a-4165-9eb7-7ac7f4fca456/id-preview-3f47c1ed--68681bc0-f511-4255-816f-8833e4c7fe76.lovable.app-1778944952618.png" },
+      { name: "twitter:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/b8825e3a-868a-4165-9eb7-7ac7f4fca456/id-preview-3f47c1ed--68681bc0-f511-4255-816f-8833e4c7fe76.lovable.app-1778944952618.png" },
     ],
     links: [
       {
