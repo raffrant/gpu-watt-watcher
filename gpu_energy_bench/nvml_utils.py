@@ -131,6 +131,81 @@ def snapshot(index: int = 0) -> GpuSnapshot:
 
 # ---- power limit control via nvidia-smi (may require sudo) -----------------
 
+def driver_version() -> Optional[str]:
+    if not _NVML_OK:
+        return None
+    _ensure_init()
+    v = _safe(lambda: pynvml.nvmlSystemGetDriverVersion())
+    if isinstance(v, bytes):
+        v = v.decode()
+    return v
+
+
+def cuda_driver_version() -> Optional[str]:
+    if not _NVML_OK:
+        return None
+    _ensure_init()
+    raw = _safe(lambda: pynvml.nvmlSystemGetCudaDriverVersion())
+    if raw is None:
+        return None
+    return f"{raw // 1000}.{(raw % 1000) // 10}"
+
+
+def identify(index: int = 0) -> dict[str, Any]:
+    """Identifying info for a single GPU — UUID, PCI bus, VBIOS, serial, etc.
+
+    Everything here is best-effort: missing fields show as None.
+    """
+    h = get_handle(index)
+    name = _safe(lambda: pynvml.nvmlDeviceGetName(h), "Unknown")
+    if isinstance(name, bytes):
+        name = name.decode()
+    uuid = _safe(lambda: pynvml.nvmlDeviceGetUUID(h))
+    if isinstance(uuid, bytes):
+        uuid = uuid.decode()
+    serial = _safe(lambda: pynvml.nvmlDeviceGetSerial(h))
+    if isinstance(serial, bytes):
+        serial = serial.decode()
+    vbios = _safe(lambda: pynvml.nvmlDeviceGetVbiosVersion(h))
+    if isinstance(vbios, bytes):
+        vbios = vbios.decode()
+
+    pci = _safe(lambda: pynvml.nvmlDeviceGetPciInfo(h))
+    pci_bus = None
+    if pci is not None:
+        bus_id = getattr(pci, "busId", None)
+        if isinstance(bus_id, bytes):
+            bus_id = bus_id.decode()
+        pci_bus = bus_id
+
+    cc = _safe(lambda: pynvml.nvmlDeviceGetCudaComputeCapability(h))
+    compute_cap = f"{cc[0]}.{cc[1]}" if cc else None
+
+    arch_map = {1: "Kepler", 2: "Maxwell", 3: "Pascal", 4: "Volta",
+                5: "Turing", 6: "Ampere", 7: "Ada", 8: "Hopper", 9: "Blackwell"}
+    arch_raw = _safe(lambda: pynvml.nvmlDeviceGetArchitecture(h))
+    architecture = arch_map.get(arch_raw) if arch_raw else None
+
+    mem = _safe(lambda: pynvml.nvmlDeviceGetMemoryInfo(h))
+    mem_total = (mem.total / 1024**2) if mem else None
+
+    return {
+        "index": index,
+        "name": name,
+        "uuid": uuid,
+        "serial": serial,
+        "vbios": vbios,
+        "pci_bus_id": pci_bus,
+        "compute_capability": compute_cap,
+        "architecture": architecture,
+        "mem_total_mb": mem_total,
+    }
+
+
+def identify_all() -> list[dict[str, Any]]:
+    return [identify(i) for i in range(device_count())]
+
+
 def get_power_limit_info(index: int = 0) -> dict[str, Any]:
     snap = snapshot(index)
     return {
