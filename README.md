@@ -38,7 +38,8 @@ cd gpu-watt-watcher
 python -m venv .venv
 source .venv/bin/activate      # .venv\Scripts\Activate.ps1 on Windows
 pip install -r requirements.txt
-streamlit run streamlitapp.py
+cd gpu_energy_bench
+streamlit run streamlit_app.py
 ```
 
 Then open `http://localhost:8501` in your browser.
