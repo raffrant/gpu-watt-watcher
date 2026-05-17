@@ -717,11 +717,14 @@ with tab_history:
     else:
         # ---- filters ----
         st.subheader("Filters")
-        f1, f2, f3 = st.columns(3)
+        f1, f2, f3, f4 = st.columns(4)
         test_names = sorted([t for t in df["test_name"].dropna().unique().tolist()])
         test_pick = f1.multiselect("Test name", test_names, default=test_names)
         kernels_avail = sorted(df["kernel"].dropna().unique().tolist())
         kernel_pick = f2.multiselect("Kernel", kernels_avail, default=kernels_avail)
+        wl_avail = sorted([w for w in df.get("workload_type", pd.Series(dtype=str))
+                           .dropna().unique().tolist()])
+        wl_pick = f4.multiselect("Workload type", wl_avail, default=wl_avail)
         params_q = f3.text_input("Params contains (substring)", "")
 
         cap_series = df["power_limit_w"].dropna()
