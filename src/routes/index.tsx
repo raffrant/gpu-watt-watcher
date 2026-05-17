@@ -15,7 +15,17 @@ import {
   Terminal,
   GitBranch,
   Activity,
+  Server,
+  ExternalLink,
+  Info,
+  Maximize2,
 } from "lucide-react";
+import { useState } from "react";
+
+const DEMO_URL = (import.meta.env.VITE_DEMO_URL as string | undefined)?.trim() || "";
+const DEMO_GPU_LABEL =
+  (import.meta.env.VITE_DEMO_GPU_LABEL as string | undefined)?.trim() ||
+  "Shared demo GPU";
 
 export const Route = createFileRoute("/")({
   component: Landing,
