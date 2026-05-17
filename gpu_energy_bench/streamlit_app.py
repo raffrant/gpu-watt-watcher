@@ -747,6 +747,8 @@ with tab_history:
             sub = sub[sub["test_name"].isin(test_pick)]
         if kernel_pick:
             sub = sub[sub["kernel"].isin(kernel_pick)]
+        if wl_pick and "workload_type" in sub.columns:
+            sub = sub[sub["workload_type"].isin(wl_pick) | sub["workload_type"].isna()]
         if params_q:
             sub = sub[sub["params"].str.contains(params_q, case=False, na=False)]
         if cap_range is not None:
