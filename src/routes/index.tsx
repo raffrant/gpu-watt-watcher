@@ -1,764 +1,159 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import {
-  Zap,
-  Gauge,
-  FlaskConical,
-  LineChart,
-  Download,
-  Sliders,
-  Cpu,
-  CheckCircle2,
-  XCircle,
-  Terminal,
-  GitBranch,
-  Activity,
-  Server,
-  ExternalLink,
-  Info,
-  Maximize2,
-} from "lucide-react";
+import { Cpu, Github, Terminal, Check } from "lucide-react";
 import { useState } from "react";
 
-const DEMO_URL = (import.meta.env.VITE_DEMO_URL as string | undefined)?.trim() || "";
-const DEMO_GPU_LABEL =
-  (import.meta.env.VITE_DEMO_GPU_LABEL as string | undefined)?.trim() ||
-  "Shared demo GPU";
+const REPO_URL = "https://github.com/raffrant/gpu-watt-watcher";
+
+const INSTALL_SNIPPET = `git clone https://github.com/raffrant/gpu-watt-watcher.git
+cd gpu-watt-watcher
+python -m venv .venv
+source .venv/bin/activate      # .venv\\Scripts\\Activate.ps1 on Windows
+pip install -r requirements.txt
+streamlit run streamlitapp.py`;
 
 export const Route = createFileRoute("/")({
   component: Landing,
   head: () => ({
     meta: [
-      { title: "GPU Energy Bench — pytest for GPU energy" },
+      { title: "GPU Watt Watcher — Run on your GPU" },
       {
         name: "description",
         content:
-          "Streamlit bench measuring NVIDIA GPU energy with thresholds, power-cap sweeps, telemetry, and PASS/FAIL tests.",
+          "A small app that shows how much energy your GPU uses for basic compute, memory, and AI-style workloads.",
       },
-      {
-        property: "og:title",
-        content: "GPU Energy Bench — pytest for GPU energy",
-      },
+      { property: "og:title", content: "GPU Watt Watcher — Run on your GPU" },
       {
         property: "og:description",
-        content: "Pytest for GPU energy — measure, test, and reduce GPU power.",
+        content:
+          "A small app that shows how much energy your GPU uses for basic compute, memory, and AI-style workloads.",
       },
-      { property: "og:url", content: "https://gpu-watt-watcher.lovable.app/" },
+      { property: "og:url", content: "https://gpuegy.dev/" },
       { property: "og:type", content: "website" },
     ],
-    links: [
-      { rel: "canonical", href: "https://gpu-watt-watcher.lovable.app/" },
-    ],
-    scripts: [
-      {
-        type: "application/ld+json",
-        children: JSON.stringify({
-          "@context": "https://schema.org",
-          "@type": "SoftwareApplication",
-          name: "GPU Energy Bench",
-          applicationCategory: "DeveloperApplication",
-          operatingSystem: "Linux, Windows",
-          description:
-            "A pytest-style Streamlit bench for measuring NVIDIA GPU energy and performance with reproducible kernels, threshold-based PASS/FAIL tests, power-cap sweeps, and telemetry export.",
-          url: "https://gpu-watt-watcher.lovable.app/",
-          offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
-        }),
-      },
-    ],
+    links: [{ rel: "canonical", href: "https://gpuegy.dev/" }],
   }),
 });
 
-const features = [
-  {
-    icon: Activity,
-    title: "Accurate energy measurement",
-    body: "Background NVML sampler integrates power over time (J = ∫P·dt) using trapezoidal integration around a synchronized timed region.",
-  },
-  {
-    icon: FlaskConical,
-    title: "Pytest-style tests",
-    body: "Declare tests in tests.yaml with thresholds like min_gflops_per_s or max_energy_per_gflop. Each run renders a clear PASS/FAIL panel.",
-  },
-  {
-    icon: Sliders,
-    title: "Power-cap sweep",
-    body: "Run the same kernel under multiple nvidia-smi power caps and auto-plot the time vs energy Pareto front.",
-  },
-  {
-    icon: LineChart,
-    title: "Telemetry & history",
-    body: "Per-run power/util/temp time series, plus an SQLite history of every run for cross-config comparisons.",
-  },
-  {
-    icon: Download,
-    title: "Export everything",
-    body: "Download metrics CSV/JSON, telemetry CSV, and a self-contained Plotly HTML for sharing — one click per run.",
-  },
-  {
-    icon: GitBranch,
-    title: "Pluggable kernels",
-    body: "Register a new kernel with one function call. Built-in matmul ships with FP32/FP16/BF16 and configurable size + reps.",
-  },
-];
-
-const tabs = [
-  "GPU info",
-  "Matrix benchmark",
-  "Test registry",
-  "Telemetry",
-  "Power limits",
-  "History",
-  "Export",
-];
-
 function Landing() {
+  const [copied, setCopied] = useState(false);
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(INSTALL_SNIPPET);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    } catch {
+      /* noop */
+    }
+  };
+
   return (
-    <div className="min-h-screen bg-background text-foreground">
+    <main className="min-h-screen bg-background text-foreground">
       {/* Hero */}
-      <header className="relative overflow-hidden border-b border-border">
-        <div className="absolute inset-0 -z-10 opacity-60 [background:radial-gradient(60%_60%_at_50%_0%,oklch(0.488_0.243_264.376/0.18),transparent_70%)]" />
-        <div className="mx-auto max-w-6xl px-6 pb-20 pt-16 sm:pt-24">
-          <div className="flex items-center gap-2">
-            <Zap className="h-5 w-5 text-primary" />
-            <span className="font-mono text-xs uppercase tracking-widest text-muted-foreground">
-              gpu_energy_bench
-            </span>
-          </div>
-          <h1 className="mt-6 text-4xl font-semibold tracking-tight sm:text-6xl">
-            Pytest, but for{" "}
-            <span className="bg-gradient-to-r from-primary via-chart-4 to-chart-1 bg-clip-text text-transparent">
-              GPU energy
-            </span>
-            .
-          </h1>
-          <p className="mt-6 max-w-2xl text-base text-muted-foreground sm:text-lg">
-            Run small, reproducible GPU benchmarks. Measure joules, not just
-            FLOPs. Set thresholds. Sweep power caps. Find the sweet spot
-            between performance and power — automatically.
-          </p>
+      <section className="mx-auto max-w-3xl px-6 pt-20 pb-12 text-center">
+        <div className="inline-flex items-center gap-2 rounded-full border border-border bg-card/50 px-3 py-1 text-xs text-muted-foreground mb-6">
+          <Cpu className="h-3.5 w-3.5" />
+          Runs locally on your NVIDIA GPU
+        </div>
 
-          <div className="mt-8 flex flex-wrap gap-3">
-            <Button size="lg" asChild>
-              <a href="#quickstart">
-                <Terminal className="mr-1 h-4 w-4" />
-                Quickstart
-              </a>
+        <h1 className="text-4xl md:text-6xl font-semibold tracking-tight">
+          GPU Watt Watcher
+          <span className="block text-2xl md:text-3xl text-muted-foreground font-normal mt-3">
+            Run on your GPU
+          </span>
+        </h1>
+
+        <p className="mt-6 text-lg text-muted-foreground leading-relaxed max-w-xl mx-auto">
+          A small app that shows how much energy your GPU uses for basic
+          compute, memory, and AI-style workloads.
+        </p>
+
+        <div className="mt-8 flex flex-col sm:flex-row gap-3 justify-center">
+          <Button asChild size="lg" className="text-base">
+            <a href={REPO_URL} target="_blank" rel="noopener noreferrer">
+              <Github className="mr-1" />
+              Run on my GPU
+            </a>
+          </Button>
+          <Button asChild size="lg" variant="outline" className="text-base">
+            <a href="#install">
+              <Terminal className="mr-1" />
+              See install steps
+            </a>
+          </Button>
+        </div>
+      </section>
+
+      {/* Install snippet */}
+      <section id="install" className="mx-auto max-w-3xl px-6 pb-12">
+        <Card className="overflow-hidden border-border">
+          <div className="flex items-center justify-between border-b border-border bg-muted/40 px-4 py-2">
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Terminal className="h-3.5 w-3.5" />
+              bash
+            </div>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={copy}
+              className="h-7 px-2 text-xs"
+            >
+              {copied ? (
+                <>
+                  <Check className="mr-1 h-3.5 w-3.5" /> Copied
+                </>
+              ) : (
+                "Copy"
+              )}
             </Button>
-            <Button size="lg" variant="outline" asChild>
-              <a href="#features">See what it does</a>
-            </Button>
           </div>
-
-          <div className="mt-10 flex flex-wrap items-center gap-2 text-xs">
-            <Badge variant="secondary" className="font-mono">PyTorch</Badge>
-            <Badge variant="secondary" className="font-mono">pynvml</Badge>
-            <Badge variant="secondary" className="font-mono">Streamlit</Badge>
-            <Badge variant="secondary" className="font-mono">SQLite</Badge>
-            <Badge variant="secondary" className="font-mono">Plotly</Badge>
-          </div>
-        </div>
-      </header>
-
-      {/* Quickstart */}
-      <section id="quickstart" className="mx-auto max-w-6xl px-6 py-16">
-        <div className="grid gap-8 lg:grid-cols-2 lg:items-start">
-          <div>
-            <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">
-              Launch the bench on your machine
-            </h2>
-            <p className="mt-3 text-muted-foreground">
-              The Streamlit app talks to NVML on a real NVIDIA GPU, so it has to
-              run locally (or on a GPU host you control). Three copy-paste
-              commands and the full 8-tab control panel opens at{" "}
-              <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">
-                localhost:8501
-              </code>
-              .
-            </p>
-
-            <div className="mt-6 flex flex-wrap gap-3">
-              <Button asChild size="lg">
-                <a
-                  href="https://github.com/codespaces/new?machine=gpuLargePremiumLinux"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  <Terminal className="mr-2 h-4 w-4" />
-                  Open on a GPU host
-                </a>
-              </Button>
-              <Button asChild variant="outline" size="lg">
-                <a href="#install-block">
-                  <Download className="mr-2 h-4 w-4" />
-                  Run locally
-                </a>
-              </Button>
-            </div>
-
-            <ul className="mt-8 space-y-3 text-sm">
-              <Step n={1} title="Install dependencies">
-                Tiny set: pynvml, torch, streamlit, plotly, pyyaml, pandas.
-              </Step>
-              <Step n={2} title="Launch the bench">
-                Streamlit serves the 8-tab GPU Energy Lab locally on port 8501.
-              </Step>
-              <Step n={3} title="Define tests in tests.yaml">
-                Declarative thresholds. Edit and rerun — no code changes.
-              </Step>
-              <Step n={4} title="Sweep power caps & export">
-                Pareto-optimize energy vs. time. Share results as CSV/JSON/HTML.
-              </Step>
-            </ul>
-          </div>
-
-          <Card
-            id="install-block"
-            className="overflow-hidden border-border bg-card"
-          >
-            <div className="flex items-center gap-2 border-b border-border bg-muted/40 px-4 py-2">
-              <span className="h-2.5 w-2.5 rounded-full bg-destructive/70" />
-              <span className="h-2.5 w-2.5 rounded-full bg-chart-4/70" />
-              <span className="h-2.5 w-2.5 rounded-full bg-chart-2/70" />
-              <span className="ml-2 font-mono text-xs text-muted-foreground">
-                terminal
-              </span>
-              <button
-                type="button"
-                onClick={() => {
-                  navigator.clipboard?.writeText(
-                    `pip install -r gpu_energy_bench/requirements.txt\nstreamlit run gpu_energy_bench/gpu_energy_lab.py`,
-                  );
-                }}
-                className="ml-auto rounded border border-border px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                aria-label="Copy install commands"
-              >
-                Copy
-              </button>
-            </div>
-            <pre className="overflow-x-auto p-4 font-mono text-xs leading-relaxed text-foreground">
-{`# 1. install
-pip install -r gpu_energy_bench/requirements.txt
-
-# 2. run the bench (opens http://localhost:8501 in your browser)
-streamlit run gpu_energy_bench/gpu_energy_lab.py
-
-# 3. add a test in gpu_energy_bench/tests.yaml
-- name: matmul_medium_fp32
-  kernel: matmul
-  params:  { size: 4096, repetitions: 10, dtype: float32 }
-  thresholds:
-    min_gflops_per_s:    2000
-    max_energy_per_gflop: 0.05
-    max_temp_c:           85`}
-            </pre>
-            <div className="border-t border-border bg-muted/20 px-4 py-3 text-xs text-muted-foreground">
-              No NVIDIA GPU on this machine? Spin up a GPU Codespace, a
-              RunPod/Vast instance, or expose your home rig with{" "}
-              <code className="rounded bg-muted px-1 py-0.5 font-mono">
-                ngrok http 8501
-              </code>{" "}
-              and share the link.
-            </div>
-          </Card>
-        </div>
+          <pre className="overflow-x-auto px-4 py-4 text-sm leading-relaxed font-mono text-foreground/90">
+            <code>{INSTALL_SNIPPET}</code>
+          </pre>
+        </Card>
+        <p className="mt-3 text-sm text-muted-foreground text-center">
+          Requires an NVIDIA GPU with CUDA and PyTorch installed.
+        </p>
       </section>
 
-      {/* Hosted demo */}
-      <HostedDemo />
-
-
-
-      {/* Features */}
-      <section id="features" className="border-y border-border bg-muted/20">
-        <div className="mx-auto max-w-6xl px-6 py-16">
-          <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">
-            What's in the box
-          </h2>
-          <p className="mt-2 max-w-2xl text-muted-foreground">
-            Six things you'd otherwise glue together yourself.
-          </p>
-
-          <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {features.map((f) => (
-              <Card
-                key={f.title}
-                className="group border-border bg-card p-6 transition-colors hover:border-primary/40"
-              >
-                <f.icon className="h-5 w-5 text-primary" />
-                <h3 className="mt-4 font-semibold">{f.title}</h3>
-                <p className="mt-2 text-sm text-muted-foreground">{f.body}</p>
-              </Card>
-            ))}
-          </div>
-        </div>
+      {/* What you can learn */}
+      <section className="mx-auto max-w-3xl px-6 pb-24">
+        <h2 className="text-xl font-semibold tracking-tight mb-6">
+          What you can learn
+        </h2>
+        <ul className="space-y-4">
+          {[
+            "Is your workload compute-bound or memory-bound?",
+            "Does changing batch size or precision (FP32 vs FP16) reduce Joules per token?",
+            "How does your GPU's energy usage change with different workloads?",
+          ].map((item) => (
+            <li
+              key={item}
+              className="flex gap-3 rounded-lg border border-border bg-card/40 p-4"
+            >
+              <Check className="h-5 w-5 text-primary shrink-0 mt-0.5" />
+              <span className="text-foreground/90">{item}</span>
+            </li>
+          ))}
+        </ul>
       </section>
 
-      {/* Tabs preview + thresholds */}
-      <section className="mx-auto max-w-6xl px-6 py-16">
-        <div className="grid gap-10 lg:grid-cols-2">
-          <div>
-            <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">
-              Seven tabs. One workflow.
-            </h2>
-            <p className="mt-2 text-muted-foreground">
-              The Streamlit app is structured so each step of "measure → test →
-              optimize → share" gets its own surface.
-            </p>
-            <div className="mt-6 flex flex-wrap gap-2">
-              {tabs.map((t) => (
-                <span
-                  key={t}
-                  className="rounded-md border border-border bg-card px-3 py-1.5 font-mono text-xs text-foreground"
-                >
-                  {t}
-                </span>
-              ))}
-            </div>
-
-            <div className="mt-8 grid grid-cols-2 gap-3 sm:grid-cols-3">
-              <Stat icon={Cpu} label="NVML metrics" value="14+" />
-              <Stat icon={Gauge} label="Sample rate" value="up to 50 Hz" />
-              <Stat icon={Activity} label="Energy method" value="∫ P · dt" />
-            </div>
-          </div>
-
-          <Card className="border-border bg-card p-6">
-            <div className="flex items-center justify-between">
-              <h3 className="font-semibold">Test result</h3>
-              <Badge className="bg-chart-2/20 text-chart-2 hover:bg-chart-2/30">
-                matmul_medium_fp32
-              </Badge>
-            </div>
-
-            <div className="mt-4 rounded-md border border-chart-2/40 bg-chart-2/10 p-3 text-sm font-medium text-chart-2">
-              ✅ ALL THRESHOLDS PASSED
-            </div>
-
-            <div className="mt-4 grid gap-2">
-              <Check
-                pass
-                name="min_gflops_per_s"
-                actual="2,431"
-                op="≥"
-                threshold="2,000"
-              />
-              <Check
-                pass
-                name="max_energy_per_gflop"
-                actual="0.041"
-                op="≤"
-                threshold="0.050"
-              />
-              <Check
-                pass={false}
-                name="max_temp_c"
-                actual="87.2"
-                op="≤"
-                threshold="85"
-              />
-            </div>
-
-            <p className="mt-4 text-xs text-muted-foreground">
-              Each threshold becomes its own card so failures are unmissable.
-            </p>
-          </Card>
-        </div>
-      </section>
-
-      {/* Power-cap sweep callout */}
-      <section className="border-t border-border bg-muted/20">
-        <div className="mx-auto max-w-6xl px-6 py-16">
-          <div className="grid gap-8 lg:grid-cols-[1.1fr_1fr] lg:items-center">
-            <div>
-              <Badge variant="outline" className="font-mono">
-                experiment mode
-              </Badge>
-              <h2 className="mt-4 text-2xl font-semibold tracking-tight sm:text-3xl">
-                Find the energy sweet spot — automatically
-              </h2>
-              <p className="mt-3 text-muted-foreground">
-                Pick a test, a min/max wattage and a number of steps. The bench
-                applies each cap via <code className="font-mono text-xs">nvidia-smi -pl</code>
-                , reruns the kernel under stable conditions, and plots the
-                time-vs-energy Pareto front. Original cap restored on exit.
-              </p>
-              <ul className="mt-6 space-y-2 text-sm">
-                <Bullet>Cap vs. elapsed time + total energy</Bullet>
-                <Bullet>Energy per GFLOP across caps</Bullet>
-                <Bullet>Every sweep run saved to history</Bullet>
-              </ul>
-            </div>
-
-            <Card className="border-border bg-card p-6">
-              <div className="flex items-center justify-between text-xs text-muted-foreground">
-                <span className="font-mono">power_sweep.csv</span>
-                <Download className="h-3.5 w-3.5" />
-              </div>
-              <div className="mt-3 overflow-x-auto">
-                <table className="w-full text-xs">
-                  <thead className="border-b border-border text-muted-foreground">
-                    <tr>
-                      <Th>cap_w</Th>
-                      <Th>elapsed_s</Th>
-                      <Th>energy_j</Th>
-                      <Th>J/GFLOP</Th>
-                    </tr>
-                  </thead>
-                  <tbody className="font-mono">
-                    <Tr>
-                      <Td>150</Td>
-                      <Td>2.41</Td>
-                      <Td>312.7</Td>
-                      <Td>0.046</Td>
-                    </Tr>
-                    <Tr>
-                      <Td>200</Td>
-                      <Td>1.88</Td>
-                      <Td>340.2</Td>
-                      <Td>0.050</Td>
-                    </Tr>
-                    <Tr highlight>
-                      <Td>250</Td>
-                      <Td>1.62</Td>
-                      <Td>388.9</Td>
-                      <Td>0.057</Td>
-                    </Tr>
-                    <Tr>
-                      <Td>300</Td>
-                      <Td>1.55</Td>
-                      <Td>447.1</Td>
-                      <Td>0.066</Td>
-                    </Tr>
-                  </tbody>
-                </table>
-              </div>
-              <p className="mt-3 text-xs text-muted-foreground">
-                A 150 W cap traded ~55% more time for{" "}
-                <span className="text-chart-2">30% less energy</span>.
-              </p>
-            </Card>
-          </div>
-        </div>
-      </section>
-
-      {/* Add a kernel */}
-      <section className="mx-auto max-w-6xl px-6 py-16">
-        <div className="grid gap-8 lg:grid-cols-2 lg:items-start">
-          <div>
-            <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">
-              Add your own kernel
-            </h2>
-            <p className="mt-3 text-muted-foreground">
-              A kernel is any function that does its own warmup +{" "}
-              <code className="font-mono text-xs">torch.cuda.synchronize()</code>
-              and returns a <code className="font-mono text-xs">KernelResult</code>
-              . Register it once — it shows up in the test registry and history
-              automatically.
-            </p>
-          </div>
-          <Card className="overflow-hidden border-border bg-card">
-            <div className="border-b border-border bg-muted/40 px-4 py-2 font-mono text-xs text-muted-foreground">
-              gpu_energy_bench/kernels.py
-            </div>
-            <pre className="overflow-x-auto p-4 font-mono text-xs leading-relaxed">
-{`def _my_conv(device, size=512, channels=64, repetitions=20):
-    import torch, time
-    x = torch.randn(8, channels, size, size, device=device)
-    w = torch.randn(channels, channels, 3, 3, device=device)
-
-    for _ in range(2): torch.nn.functional.conv2d(x, w)
-    torch.cuda.synchronize()
-
-    t0 = time.perf_counter()
-    for _ in range(repetitions):
-        y = torch.nn.functional.conv2d(x, w)
-    torch.cuda.synchronize()
-    elapsed = time.perf_counter() - t0
-
-    flops = 2 * channels * channels * 9 * size * size * 8 * repetitions
-    return KernelResult(elapsed_s=elapsed, flops=flops,
-                        repetitions=repetitions)
-
-register("my_conv", _my_conv)`}
-            </pre>
-          </Card>
-        </div>
-      </section>
-
-      {/* Footer */}
       <footer className="border-t border-border">
-        <div className="mx-auto flex max-w-6xl flex-col items-start justify-between gap-4 px-6 py-8 text-sm text-muted-foreground sm:flex-row sm:items-center">
-          <div className="flex items-center gap-2">
-            <Zap className="h-4 w-4 text-primary" />
-            <span className="font-mono">gpu_energy_bench</span>
-          </div>
-          <p>Measure joules. Set thresholds. Reduce waste.</p>
+        <div className="mx-auto max-w-3xl px-6 py-6 flex flex-col sm:flex-row items-center justify-between gap-3 text-sm text-muted-foreground">
+          <span>Open source · MIT</span>
+          <a
+            href={REPO_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 hover:text-foreground transition-colors"
+          >
+            <Github className="h-4 w-4" />
+            raffrant/gpu-watt-watcher
+          </a>
         </div>
       </footer>
-    </div>
+    </main>
   );
 }
-
-/* -------------------------------------------------------------------------- */
-/* Small presentational helpers                                               */
-/* -------------------------------------------------------------------------- */
-
-function Step({
-  n,
-  title,
-  children,
-}: {
-  n: number;
-  title: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <li className="flex gap-3">
-      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/10 font-mono text-xs text-primary">
-        {n}
-      </span>
-      <div>
-        <p className="font-medium text-foreground">{title}</p>
-        <p className="text-muted-foreground">{children}</p>
-      </div>
-    </li>
-  );
-}
-
-function Stat({
-  icon: Icon,
-  label,
-  value,
-}: {
-  icon: typeof Cpu;
-  label: string;
-  value: string;
-}) {
-  return (
-    <Card className="border-border bg-card p-4">
-      <Icon className="h-4 w-4 text-primary" />
-      <p className="mt-2 text-lg font-semibold">{value}</p>
-      <p className="text-xs text-muted-foreground">{label}</p>
-    </Card>
-  );
-}
-
-function Check({
-  pass,
-  name,
-  actual,
-  op,
-  threshold,
-}: {
-  pass: boolean;
-  name: string;
-  actual: string;
-  op: string;
-  threshold: string;
-}) {
-  return (
-    <div
-      className={
-        "flex items-start gap-2 rounded-md border p-3 text-xs " +
-        (pass
-          ? "border-chart-2/40 bg-chart-2/5"
-          : "border-destructive/40 bg-destructive/5")
-      }
-    >
-      {pass ? (
-        <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-chart-2" />
-      ) : (
-        <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
-      )}
-      <div className="font-mono">
-        <p className="font-semibold text-foreground">{name}</p>
-        <p className="text-muted-foreground">
-          actual <span className="text-foreground">{actual}</span> {op}{" "}
-          threshold <span className="text-foreground">{threshold}</span>
-        </p>
-      </div>
-    </div>
-  );
-}
-
-function Bullet({ children }: { children: React.ReactNode }) {
-  return (
-    <li className="flex gap-2 text-muted-foreground">
-      <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
-      <span>{children}</span>
-    </li>
-  );
-}
-
-function Th({ children }: { children: React.ReactNode }) {
-  return <th className="px-2 py-1.5 text-left font-medium">{children}</th>;
-}
-function Td({ children }: { children: React.ReactNode }) {
-  return <td className="px-2 py-1.5">{children}</td>;
-}
-function Tr({
-  children,
-  highlight,
-}: {
-  children: React.ReactNode;
-  highlight?: boolean;
-}) {
-  return (
-    <tr
-      className={
-        "border-b border-border/60 last:border-0 " +
-        (highlight ? "bg-primary/5 text-foreground" : "")
-      }
-    >
-      {children}
-    </tr>
-  );
-}
-
-/* -------------------------------------------------------------------------- */
-/* Hosted demo                                                                */
-/* -------------------------------------------------------------------------- */
-
-function HostedDemo() {
-  const [url, setUrl] = useState(DEMO_URL);
-  const [active, setActive] = useState(DEMO_URL);
-  const [fullscreen, setFullscreen] = useState(false);
-  const configured = active.length > 0;
-
-  return (
-    <section id="demo" className="border-t border-border">
-      <div className="mx-auto max-w-6xl px-6 py-16">
-        <div className="flex flex-wrap items-center gap-3">
-          <Badge variant="outline" className="font-mono">
-            <Server className="mr-1 h-3 w-3" />
-            hosted demo
-          </Badge>
-          <Badge className="bg-chart-4/20 font-mono text-chart-4 hover:bg-chart-4/30">
-            {DEMO_GPU_LABEL}
-          </Badge>
-        </div>
-        <h2 className="mt-4 text-2xl font-semibold tracking-tight sm:text-3xl">
-          Try the bench on a demo GPU
-        </h2>
-        <p className="mt-3 max-w-2xl text-muted-foreground">
-          This is a shared instance running on a GPU we control. Every number
-          you see here describes the{" "}
-          <span className="font-medium text-foreground">demo GPU</span> — not
-          your own machine. For numbers about your own hardware, use the
-          Quickstart above and run the bench locally.
-        </p>
-
-        <div className="mt-6 flex items-start gap-2 rounded-md border border-chart-4/40 bg-chart-4/5 p-3 text-xs text-chart-4">
-          <Info className="mt-0.5 h-4 w-4 shrink-0" />
-          <p>
-            Results below reflect the <strong>{DEMO_GPU_LABEL}</strong> under
-            shared load. They are illustrative, not a benchmark of your device.
-          </p>
-        </div>
-
-        {!configured && (
-          <Card className="mt-6 border-border bg-card p-6">
-            <h3 className="font-semibold">Point at your hosted instance</h3>
-            <p className="mt-2 text-sm text-muted-foreground">
-              Run the Streamlit app on a GPU box you control (RunPod, Lambda,
-              your own server) and expose it over HTTPS. Then either set the{" "}
-              <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">
-                VITE_DEMO_URL
-              </code>{" "}
-              env var at build time, or paste the URL below to preview it in
-              this session.
-            </p>
-            <div className="mt-4 flex flex-col gap-2 sm:flex-row">
-              <input
-                type="url"
-                value={url}
-                onChange={(e) => setUrl(e.target.value)}
-                placeholder="https://demo-gpu.example.com"
-                className="flex-1 rounded-md border border-border bg-background px-3 py-2 font-mono text-xs focus:outline-none focus:ring-1 focus:ring-ring"
-              />
-              <Button
-                onClick={() => setActive(url.trim())}
-                disabled={!url.trim()}
-              >
-                Load demo
-              </Button>
-            </div>
-            <pre className="mt-4 overflow-x-auto rounded-md bg-muted p-3 font-mono text-[11px] leading-relaxed text-muted-foreground">
-{`# On the GPU host
-pip install -r gpu_energy_bench/requirements.txt
-streamlit run gpu_energy_bench/gpu_energy_lab.py \\
-  --server.port 8501 --server.address 0.0.0.0
-
-# Then expose via your reverse proxy / ngrok / Cloudflare tunnel
-# and set VITE_DEMO_URL=https://your-host at build time.`}
-            </pre>
-          </Card>
-        )}
-
-        {configured && (
-          <Card className="mt-6 overflow-hidden border-border bg-card">
-            <div className="flex flex-wrap items-center gap-2 border-b border-border bg-muted/40 px-4 py-2">
-              <Server className="h-3.5 w-3.5 text-chart-4" />
-              <span className="font-mono text-xs text-muted-foreground">
-                {DEMO_GPU_LABEL}
-              </span>
-              <span className="font-mono text-[10px] text-muted-foreground/70">
-                {active}
-              </span>
-              <div className="ml-auto flex gap-2">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setFullscreen((v) => !v)}
-                >
-                  <Maximize2 className="mr-1 h-3 w-3" />
-                  {fullscreen ? "Exit fullscreen" : "Fullscreen"}
-                </Button>
-                <Button size="sm" variant="outline" asChild>
-                  <a href={active} target="_blank" rel="noopener noreferrer">
-                    <ExternalLink className="mr-1 h-3 w-3" />
-                    Open in new tab
-                  </a>
-                </Button>
-              </div>
-            </div>
-            <div
-              className={
-                fullscreen
-                  ? "fixed inset-0 z-50 bg-background"
-                  : "relative h-[720px]"
-              }
-            >
-              {fullscreen && (
-                <button
-                  type="button"
-                  onClick={() => setFullscreen(false)}
-                  className="absolute right-4 top-4 z-10 rounded border border-border bg-card px-3 py-1 text-xs"
-                >
-                  Close
-                </button>
-              )}
-              <iframe
-                src={active}
-                title={`GPU Energy Bench on ${DEMO_GPU_LABEL}`}
-                className="h-full w-full border-0"
-                allow="clipboard-read; clipboard-write"
-              />
-            </div>
-            <div className="border-t border-border bg-muted/20 px-4 py-3 text-xs text-muted-foreground">
-              You are viewing the bench running on the{" "}
-              <span className="font-medium text-foreground">
-                {DEMO_GPU_LABEL}
-              </span>
-              . Any energy, FLOPs, or temperature reading is a property of that
-              card, not your local machine.
-            </div>
-          </Card>
-        )}
-      </div>
-    </section>
-  );
-}
-
