@@ -795,9 +795,11 @@ with tab_history:
             return [""] * len(row)
 
         display_cols = [
-            "id", "ts", "test_name", "kernel", "params", "power_limit_w",
-            "elapsed_s", "energy_j", "energy_per_gflop", "gflops_per_s",
-            "avg_power_w", "max_temp_c", "passed",
+            "id", "ts", "test_name", "kernel", "workload_type", "params",
+            "power_limit_w", "elapsed_s", "energy_j", "energy_per_gflop",
+            "energy_per_work_unit", "work_unit", "throughput_per_s",
+            "gflops_per_s", "avg_power_w", "max_temp_c",
+            "latency_p95_ms", "passed",
             "prev_energy_j", "prev_elapsed_s", "regression",
         ]
         display_cols = [c for c in display_cols if c in sub.columns]
