@@ -283,6 +283,8 @@ with tab_bench:
             power_limit_w=gpu_snap.power_limit_w if gpu_snap else None,
             gpu_name=gpu_snap.name if gpu_snap else None,
             passed=None, checks=None, samples_df=df,
+            driver_version=nv.driver_version(),
+            cuda_version=nv.cuda_driver_version(),
         )
         if not df.empty:
             st.plotly_chart(px.line(df, x="t", y="power_w", title="Power (W) during run"),
@@ -312,26 +314,71 @@ with tab_tests:
         chosen_name = st.selectbox("Test to edit & run", names)
         spec = next(s for s in specs if s.name == chosen_name)
 
+        st.caption(
+            f"**Workload:** `{spec.workload_type or 'microbenchmark'}` · "
+            f"**Kernel:** `{spec.kernel}` · "
+            f"**Power cap (declared):** "
+            f"{f'{spec.power_limit_w:.0f} W' if spec.power_limit_w else '—'}"
+        )
+
         st.markdown("**Override parameters for this run** (does not modify tests.yaml)")
         p = dict(spec.params)
-        c1, c2, c3 = st.columns(3)
-        size_v = c1.number_input("size", 128, 16384,
-                                 int(p.get("size", 4096)), 128, key="t_size")
-        reps_v = c2.number_input("repetitions", 1, 1000,
-                                 int(p.get("repetitions", 10)), key="t_reps")
-        dtype_default = str(p.get("dtype", "float32"))
+
+        # Matmul has a fixed UI; everything else gets a JSON editor + dtype select.
         dtype_options = ["float32", "float16", "bfloat16"]
-        dtype_idx = dtype_options.index(dtype_default) if dtype_default in dtype_options else 0
-        dtype_v = c3.selectbox("dtype", dtype_options, index=dtype_idx, key="t_dtype")
+        if spec.kernel == "matmul":
+            c1, c2, c3 = st.columns(3)
+            size_v = c1.number_input("size", 128, 16384,
+                                     int(p.get("size", 4096)), 128, key="t_size")
+            reps_v = c2.number_input("repetitions", 1, 1000,
+                                     int(p.get("repetitions", 10)), key="t_reps")
+            dtype_default = str(p.get("dtype", "float32"))
+            dtype_idx = dtype_options.index(dtype_default) if dtype_default in dtype_options else 0
+            dtype_v = c3.selectbox("dtype", dtype_options, index=dtype_idx, key="t_dtype")
+            override = {"size": int(size_v), "repetitions": int(reps_v), "dtype": dtype_v}
+            params_json_err = None
+        else:
+            params_text = st.text_area(
+                "Params (JSON)", value=json.dumps(p, indent=2),
+                height=200, key=f"t_json_{spec.name}",
+                help="Edit any field — batch_size, seq_len, gen_tokens, dtype, …",
+            )
+            try:
+                override = json.loads(params_text or "{}")
+                params_json_err = None
+            except Exception as e:
+                override = {}
+                params_json_err = str(e)
+                st.error(f"Invalid JSON: {e}")
 
         device = st.selectbox("Device", ["cuda", "cpu"], key="tests_device")
+        apply_cap = False
+        sudo_cap = False
+        if spec.power_limit_w:
+            apc1, apc2 = st.columns([3, 2])
+            apply_cap = apc1.checkbox(
+                f"Apply this test's declared power cap ({spec.power_limit_w:.0f} W) "
+                "before running",
+                value=False, key=f"t_apply_cap_{spec.name}",
+            )
+            sudo_cap = apc2.checkbox("Use sudo -n", value=False,
+                                     key=f"t_sudo_cap_{spec.name}")
 
         with st.expander("Thresholds for this test"):
             st.json(spec.thresholds or {})
 
-        if st.button("Run selected test", type="primary"):
-            params = {**p, "size": int(size_v),
-                      "repetitions": int(reps_v), "dtype": dtype_v}
+        if st.button("Run selected test", type="primary",
+                     disabled=bool(params_json_err if spec.kernel != 'matmul' else False)):
+            params = {**p, **override}
+
+            # Optionally apply the declared power cap before the run.
+            if apply_cap and spec.power_limit_w:
+                ok, msg = nv.set_power_limit(float(spec.power_limit_w),
+                                             gpu_index, use_sudo=sudo_cap)
+                if ok:
+                    st.info(f"Power cap set to {spec.power_limit_w:.0f} W. {msg}")
+                else:
+                    st.warning(f"Could not set power cap: {msg}")
             with st.spinner(f"Running {spec.name}…"):
                 metrics, sampler = runner.run(
                     spec.kernel, params, device=device,
@@ -339,11 +386,14 @@ with tab_tests:
                 )
             passed, checks = evaluate(spec, {
                 "gflops_per_s": metrics.gflops_per_s,
+                "throughput_per_s": metrics.throughput_per_s,
                 "energy_j": metrics.energy_j,
                 "energy_per_gflop": metrics.energy_per_gflop,
+                "energy_per_work_unit": metrics.energy_per_work_unit,
                 "avg_power_w": metrics.avg_power_w,
                 "max_temp_c": metrics.max_temp_c,
                 "elapsed_s": metrics.elapsed_s,
+                "latency_p95_ms": metrics.latency_p95_ms,
             })
             _stash_last_run(f"test:{spec.name}", metrics, sampler)
 
@@ -353,19 +403,26 @@ with tab_tests:
                 power_limit_w=gpu_snap.power_limit_w if gpu_snap else None,
                 gpu_name=gpu_snap.name if gpu_snap else None,
                 passed=passed, checks=checks, samples_df=_samples_df(sampler),
+                driver_version=nv.driver_version(),
+                cuda_version=nv.cuda_driver_version(),
             )
 
             st.subheader(f"Result: {spec.name}")
             _render_check_panel(checks)
 
             st.markdown("**Run metrics**")
+            wu = metrics.work_unit or "work"
             mdf = pd.DataFrame([{
+                "workload": metrics.workload_type,
+                f"throughput ({wu}/s)": round(metrics.throughput_per_s, 2),
+                f"J/{wu}": round(metrics.energy_per_work_unit, 6),
                 "gflops/s": round(metrics.gflops_per_s, 1),
                 "energy (J)": round(metrics.energy_j, 2),
-                "J/GFLOP": round(metrics.energy_per_gflop, 4),
                 "avg power (W)": round(metrics.avg_power_w, 1),
                 "max temp (°C)": round(metrics.max_temp_c, 1),
                 "elapsed (s)": round(metrics.elapsed_s, 3),
+                "p95 latency (ms)": (round(metrics.latency_p95_ms, 2)
+                                     if metrics.latency_p95_ms else None),
             }])
             st.dataframe(mdf, use_container_width=True)
 
@@ -612,6 +669,8 @@ with tab_power:
                             power_limit_w=cap, gpu_name=gpu_snap.name,
                             passed=None, checks=None,
                             samples_df=_samples_df(sampler),
+                            driver_version=nv.driver_version(),
+                            cuda_version=nv.cuda_driver_version(),
                         )
                         prog.progress((i + 1) / len(caps))
 
@@ -662,11 +721,14 @@ with tab_history:
     else:
         # ---- filters ----
         st.subheader("Filters")
-        f1, f2, f3 = st.columns(3)
+        f1, f2, f3, f4 = st.columns(4)
         test_names = sorted([t for t in df["test_name"].dropna().unique().tolist()])
         test_pick = f1.multiselect("Test name", test_names, default=test_names)
         kernels_avail = sorted(df["kernel"].dropna().unique().tolist())
         kernel_pick = f2.multiselect("Kernel", kernels_avail, default=kernels_avail)
+        wl_avail = sorted([w for w in df.get("workload_type", pd.Series(dtype=str))
+                           .dropna().unique().tolist()])
+        wl_pick = f4.multiselect("Workload type", wl_avail, default=wl_avail)
         params_q = f3.text_input("Params contains (substring)", "")
 
         cap_series = df["power_limit_w"].dropna()
@@ -689,6 +751,8 @@ with tab_history:
             sub = sub[sub["test_name"].isin(test_pick)]
         if kernel_pick:
             sub = sub[sub["kernel"].isin(kernel_pick)]
+        if wl_pick and "workload_type" in sub.columns:
+            sub = sub[sub["workload_type"].isin(wl_pick) | sub["workload_type"].isna()]
         if params_q:
             sub = sub[sub["params"].str.contains(params_q, case=False, na=False)]
         if cap_range is not None:
@@ -731,9 +795,11 @@ with tab_history:
             return [""] * len(row)
 
         display_cols = [
-            "id", "ts", "test_name", "kernel", "params", "power_limit_w",
-            "elapsed_s", "energy_j", "energy_per_gflop", "gflops_per_s",
-            "avg_power_w", "max_temp_c", "passed",
+            "id", "ts", "test_name", "kernel", "workload_type", "params",
+            "power_limit_w", "elapsed_s", "energy_j", "energy_per_gflop",
+            "energy_per_work_unit", "work_unit", "throughput_per_s",
+            "gflops_per_s", "avg_power_w", "max_temp_c",
+            "latency_p95_ms", "passed",
             "prev_energy_j", "prev_elapsed_s", "regression",
         ]
         display_cols = [c for c in display_cols if c in sub.columns]

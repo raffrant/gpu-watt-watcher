@@ -8,7 +8,7 @@ consistent shape so the test registry can evaluate thresholds uniformly.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Optional
 
 from . import kernels
 from .telemetry import TelemetrySampler
@@ -28,6 +28,14 @@ class RunMetrics:
     max_temp_c: float
     avg_util_gpu: float
     repetitions: int
+    # ---- useful-work accounting -----------------------------------------
+    workload_type: str = "microbenchmark"
+    work_unit: str = "gflops"
+    work_amount: float = 0.0
+    throughput_per_s: float = 0.0
+    energy_per_work_unit: float = 0.0
+    latency_mean_ms: Optional[float] = None
+    latency_p95_ms: Optional[float] = None
     checksum: float | None = None
     samples_csv: str | None = None
     extra: dict[str, Any] = field(default_factory=dict)
@@ -53,6 +61,7 @@ def run(kernel_name: str, params: dict[str, Any], device: str = "cuda",
     energy_j = sampler.energy_joules()
     total_gflops = result.flops / 1e9
     energy_per_gflop = (energy_j / total_gflops) if total_gflops > 0 else float("inf")
+    energy_per_work_unit = (energy_j / result.work_amount) if result.work_amount > 0 else float("inf")
 
     metrics = RunMetrics(
         kernel=kernel_name,
@@ -67,6 +76,13 @@ def run(kernel_name: str, params: dict[str, Any], device: str = "cuda",
         max_temp_c=sampler.max_temp_c(),
         avg_util_gpu=sampler.avg_util_gpu(),
         repetitions=result.repetitions,
+        workload_type=result.workload_type,
+        work_unit=result.work_unit,
+        work_amount=result.work_amount,
+        throughput_per_s=result.throughput_per_s,
+        energy_per_work_unit=energy_per_work_unit,
+        latency_mean_ms=result.latency_mean_ms,
+        latency_p95_ms=result.latency_p95_ms,
         checksum=result.checksum,
         extra=result.extra,
     )
