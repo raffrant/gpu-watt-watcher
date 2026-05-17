@@ -753,6 +753,60 @@ with tab_tests:
             })
         st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
 
+        # ── Export buttons ──
+        import io
+        import json as _json
+        ts_label = time.strftime("%Y%m%d-%H%M%S")
+
+        # Flat per-check CSV (one row per (test, threshold))
+        flat_rows = []
+        for r in test_results:
+            base = {
+                "test_name": r["test_name"],
+                "description": r.get("description", ""),
+                "kind": r.get("kind", ""),
+                "benchmark": r.get("benchmark", ""),
+                "overall_passed": r.get("passed"),
+                "elapsed_s": r.get("elapsed_s"),
+                "avg_power_W": r.get("avg_power_W"),
+                "energy_J": r.get("energy_J"),
+                "energy_per_token_J": r.get("energy_per_token_J"),
+                "energy_per_GFLOP_J": r.get("energy_per_GFLOP_J"),
+                "energy_per_GB_J": r.get("energy_per_GB_J"),
+                "tokens_per_s": r.get("tokens_per_s"),
+                "gflops_per_s": r.get("gflops_per_s"),
+                "effective_bandwidth_GBps": r.get("effective_bandwidth_GBps"),
+            }
+            checks = r.get("checks", [])
+            if not checks:
+                flat_rows.append({**base, "check": None, "op": None,
+                                  "threshold": None, "actual": None,
+                                  "check_passed": None, "note": ""})
+            for c in checks:
+                flat_rows.append({**base,
+                                  "check": c["name"], "op": c["op"],
+                                  "threshold": c["threshold"], "actual": c["actual"],
+                                  "check_passed": c["passed"], "note": c.get("note", "")})
+        csv_buf = io.StringIO()
+        pd.DataFrame(flat_rows).to_csv(csv_buf, index=False)
+        json_blob = _json.dumps(test_results, indent=2, default=str)
+
+        col_csv, col_json = st.columns(2)
+        col_csv.download_button(
+            "⬇️ Download CSV (one row per check)",
+            data=csv_buf.getvalue(),
+            file_name=f"test_suite_{ts_label}.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+        col_json.download_button(
+            "⬇️ Download JSON (full results + checks)",
+            data=json_blob,
+            file_name=f"test_suite_{ts_label}.json",
+            mime="application/json",
+            use_container_width=True,
+        )
+
         # ── Per-test detail with per-threshold rows ──
         st.markdown("### Per-test detail")
         for r in test_results:
