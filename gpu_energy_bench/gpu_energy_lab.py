@@ -325,27 +325,75 @@ TESTS: Dict[str, TestConfig] = {
 }
 
 
+# Map threshold key -> (metric key in result, comparison op)
+THRESHOLD_RULES: Dict[str, Tuple[str, str]] = {
+    "min_gflops_per_s":        ("gflops_per_s",            ">="),
+    "min_bandwidth_GBps":      ("effective_bandwidth_GBps", ">="),
+    "min_tokens_per_s":        ("tokens_per_s",            ">="),
+    "max_energy_J":            ("energy_J",                "<="),
+    "max_energy_per_GFLOP_J":  ("energy_per_GFLOP_J",      "<="),
+    "max_energy_per_GB_J":     ("energy_per_GB_J",         "<="),
+    "max_energy_per_token_J":  ("energy_per_token_J",      "<="),
+    "max_avg_power_W":         ("avg_power_W",             "<="),
+    "max_temp_C":              ("temp_C",                  "<="),
+    "max_elapsed_s":           ("elapsed_s",               "<="),
+}
+
+
+def _check_thresholds(result: Dict[str, Any], thresholds: Dict[str, float]) -> List[Dict[str, Any]]:
+    checks: List[Dict[str, Any]] = []
+    for thr_key, thr_val in thresholds.items():
+        if thr_key not in THRESHOLD_RULES:
+            checks.append({"name": thr_key, "op": "?", "threshold": thr_val,
+                           "actual": None, "passed": False, "note": "unknown threshold"})
+            continue
+        metric_key, op = THRESHOLD_RULES[thr_key]
+        actual = result.get(metric_key)
+        if actual is None:
+            passed = False
+            note = f"metric '{metric_key}' missing"
+        else:
+            actual_f = float(actual)
+            passed = (actual_f >= thr_val) if op == ">=" else (actual_f <= thr_val)
+            note = ""
+        checks.append({
+            "name": thr_key, "op": op, "threshold": float(thr_val),
+            "actual": None if actual is None else float(actual),
+            "passed": bool(passed), "note": note,
+        })
+    return checks
+
+
 def evaluate_test(test: TestConfig) -> Dict[str, Any]:
-    metrics: Dict[str, Any] = {}
+    """Run the test's underlying benchmark and check every threshold.
+
+    Returns a dict that merges raw metrics with:
+      - test_name, description, power_profile, kind
+      - checks: list of per-threshold {name, op, threshold, actual, passed}
+      - passed: overall PASS/FAIL (True iff every check passed)
+      - pass_<threshold_key>: flat bool flags (back-compat / CSV history)
+    """
     if test.kind == "matmul":
-        row = run_matmul_benchmark(**test.params)[0]
-        metrics.update(row)
-        metrics["pass_min_gflops_per_s"] = row["gflops_per_s"] >= test.thresholds.get("min_gflops_per_s", 0)
-        metrics["pass_max_energy_J"] = row["energy_J"] <= test.thresholds.get("max_energy_J", float("inf"))
+        result = run_matmul_benchmark(**test.params)[0]
     elif test.kind == "memory_bandwidth":
         result = run_memory_bandwidth_benchmark(**test.params)
-        metrics.update(result); metrics["benchmark"] = "memory_bandwidth"
-        metrics["pass_min_bandwidth_GBps"] = result.get("effective_bandwidth_GBps", 0) >= test.thresholds.get("min_bandwidth_GBps", 0)
-        metrics["pass_max_energy_per_GB_J"] = (result.get("energy_per_GB_J") or float("inf")) <= test.thresholds.get("max_energy_per_GB_J", float("inf"))
+        result["benchmark"] = "memory_bandwidth"
     elif test.kind == "ai_preset":
         result = run_ai_preset(**test.params)
-        metrics.update(result); metrics["benchmark"] = "ai_preset"
-        metrics["pass_max_energy_per_token_J"] = (result.get("energy_per_token_J") or float("inf")) <= test.thresholds.get("max_energy_per_token_J", float("inf"))
+        result["benchmark"] = "ai_preset"
     else:
         raise ValueError(f"Unknown test kind: {test.kind}")
+
+    checks = _check_thresholds(result, test.thresholds)
+    metrics: Dict[str, Any] = dict(result)
     metrics["test_name"] = test.name
     metrics["description"] = test.description
     metrics["power_profile"] = test.power_profile
+    metrics["kind"] = test.kind
+    metrics["checks"] = checks
+    metrics["passed"] = all(c["passed"] for c in checks) if checks else True
+    for c in checks:
+        metrics[f"pass_{c['name']}"] = c["passed"]
     return metrics
 
 
