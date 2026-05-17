@@ -325,27 +325,75 @@ TESTS: Dict[str, TestConfig] = {
 }
 
 
+# Map threshold key -> (metric key in result, comparison op)
+THRESHOLD_RULES: Dict[str, Tuple[str, str]] = {
+    "min_gflops_per_s":        ("gflops_per_s",            ">="),
+    "min_bandwidth_GBps":      ("effective_bandwidth_GBps", ">="),
+    "min_tokens_per_s":        ("tokens_per_s",            ">="),
+    "max_energy_J":            ("energy_J",                "<="),
+    "max_energy_per_GFLOP_J":  ("energy_per_GFLOP_J",      "<="),
+    "max_energy_per_GB_J":     ("energy_per_GB_J",         "<="),
+    "max_energy_per_token_J":  ("energy_per_token_J",      "<="),
+    "max_avg_power_W":         ("avg_power_W",             "<="),
+    "max_temp_C":              ("temp_C",                  "<="),
+    "max_elapsed_s":           ("elapsed_s",               "<="),
+}
+
+
+def _check_thresholds(result: Dict[str, Any], thresholds: Dict[str, float]) -> List[Dict[str, Any]]:
+    checks: List[Dict[str, Any]] = []
+    for thr_key, thr_val in thresholds.items():
+        if thr_key not in THRESHOLD_RULES:
+            checks.append({"name": thr_key, "op": "?", "threshold": thr_val,
+                           "actual": None, "passed": False, "note": "unknown threshold"})
+            continue
+        metric_key, op = THRESHOLD_RULES[thr_key]
+        actual = result.get(metric_key)
+        if actual is None:
+            passed = False
+            note = f"metric '{metric_key}' missing"
+        else:
+            actual_f = float(actual)
+            passed = (actual_f >= thr_val) if op == ">=" else (actual_f <= thr_val)
+            note = ""
+        checks.append({
+            "name": thr_key, "op": op, "threshold": float(thr_val),
+            "actual": None if actual is None else float(actual),
+            "passed": bool(passed), "note": note,
+        })
+    return checks
+
+
 def evaluate_test(test: TestConfig) -> Dict[str, Any]:
-    metrics: Dict[str, Any] = {}
+    """Run the test's underlying benchmark and check every threshold.
+
+    Returns a dict that merges raw metrics with:
+      - test_name, description, power_profile, kind
+      - checks: list of per-threshold {name, op, threshold, actual, passed}
+      - passed: overall PASS/FAIL (True iff every check passed)
+      - pass_<threshold_key>: flat bool flags (back-compat / CSV history)
+    """
     if test.kind == "matmul":
-        row = run_matmul_benchmark(**test.params)[0]
-        metrics.update(row)
-        metrics["pass_min_gflops_per_s"] = row["gflops_per_s"] >= test.thresholds.get("min_gflops_per_s", 0)
-        metrics["pass_max_energy_J"] = row["energy_J"] <= test.thresholds.get("max_energy_J", float("inf"))
+        result = run_matmul_benchmark(**test.params)[0]
     elif test.kind == "memory_bandwidth":
         result = run_memory_bandwidth_benchmark(**test.params)
-        metrics.update(result); metrics["benchmark"] = "memory_bandwidth"
-        metrics["pass_min_bandwidth_GBps"] = result.get("effective_bandwidth_GBps", 0) >= test.thresholds.get("min_bandwidth_GBps", 0)
-        metrics["pass_max_energy_per_GB_J"] = (result.get("energy_per_GB_J") or float("inf")) <= test.thresholds.get("max_energy_per_GB_J", float("inf"))
+        result["benchmark"] = "memory_bandwidth"
     elif test.kind == "ai_preset":
         result = run_ai_preset(**test.params)
-        metrics.update(result); metrics["benchmark"] = "ai_preset"
-        metrics["pass_max_energy_per_token_J"] = (result.get("energy_per_token_J") or float("inf")) <= test.thresholds.get("max_energy_per_token_J", float("inf"))
+        result["benchmark"] = "ai_preset"
     else:
         raise ValueError(f"Unknown test kind: {test.kind}")
+
+    checks = _check_thresholds(result, test.thresholds)
+    metrics: Dict[str, Any] = dict(result)
     metrics["test_name"] = test.name
     metrics["description"] = test.description
     metrics["power_profile"] = test.power_profile
+    metrics["kind"] = test.kind
+    metrics["checks"] = checks
+    metrics["passed"] = all(c["passed"] for c in checks) if checks else True
+    for c in checks:
+        metrics[f"pass_{c['name']}"] = c["passed"]
     return metrics
 
 
@@ -639,38 +687,130 @@ with tab_sweep:
 # ── Test suite ──────────────────────────────────────────────────────────────
 with tab_tests:
     st.header("Energy test suite")
+    st.caption(
+        "pytest-style runner: each test executes its underlying benchmark "
+        "and is checked against every declared threshold. Overall PASS only "
+        "if every check passes."
+    )
+
     test_names = list(TESTS.keys())
     selected = st.multiselect(
         "Select tests to run", test_names, default=test_names,
         format_func=lambda k: TESTS[k].description,
     )
 
-    if st.button("Run selected tests", type="primary"):
-        env = get_gpu_env()
-        test_results = []
+    # Preview the declared thresholds before running
+    with st.expander("📋 Declared tests & thresholds", expanded=False):
+        rows = []
         for name in selected:
+            t = TESTS[name]
+            for thr_key, thr_val in t.thresholds.items():
+                op = THRESHOLD_RULES.get(thr_key, ("?", "?"))[1]
+                rows.append({"test": name, "kind": t.kind,
+                             "threshold": thr_key, "op": op, "value": thr_val})
+        if rows:
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+    if st.button("Run selected tests", type="primary"):
+        if not selected:
+            st.warning("Select at least one test.")
+            st.stop()
+
+        env = get_gpu_env()
+        test_results: List[Dict[str, Any]] = []
+        progress = st.progress(0)
+        status = st.empty()
+        for i, name in enumerate(selected):
+            status.info(f"Running **{name}** — {TESTS[name].description}")
             res = evaluate_test(TESTS[name])
             append_run_to_history(res, env)
             test_results.append(res)
+            progress.progress((i + 1) / len(selected))
+        status.empty()
 
-        if test_results:
-            df_tests = pd.DataFrame(test_results)
-            st.dataframe(df_tests, use_container_width=True)
+        # ── Overall summary banner ──
+        n_pass = sum(1 for r in test_results if r.get("passed"))
+        n_total = len(test_results)
+        if n_pass == n_total:
+            st.success(f"✅ {n_pass}/{n_total} tests passed")
+        else:
+            st.error(f"❌ {n_pass}/{n_total} tests passed — {n_total - n_pass} failed")
 
-            summary = []
-            for r in test_results:
-                flags = [v for k, v in r.items() if k.startswith("pass_") and isinstance(v, bool)]
-                summary.append({"test": r["test_name"], "pass": all(flags) if flags else True})
-            df_sum = pd.DataFrame(summary)
-            st.markdown("**Summary**")
-            st.dataframe(df_sum)
+        # ── Summary table ──
+        st.markdown("### Summary")
+        summary_rows = []
+        for r in test_results:
+            checks = r.get("checks", [])
+            n_ok = sum(1 for c in checks if c["passed"])
+            summary_rows.append({
+                "test": r["test_name"],
+                "kind": r.get("kind", ""),
+                "result": "✅ PASS" if r.get("passed") else "❌ FAIL",
+                "checks": f"{n_ok}/{len(checks)}",
+                "elapsed_s": round(float(r.get("elapsed_s", 0)), 3),
+                "avg_power_W": round(float(r.get("avg_power_W", 0)), 1),
+                "energy_J": round(float(r.get("energy_J", 0)), 2),
+            })
+        st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
 
-            ai_results = [r for r in test_results if r.get("benchmark") == "ai_preset"]
-            if ai_results:
-                st.subheader("💡 Energy advice for AI preset tests")
-                for r in ai_results:
+        # ── Per-test detail with per-threshold rows ──
+        st.markdown("### Per-test detail")
+        for r in test_results:
+            status_icon = "✅" if r.get("passed") else "❌"
+            with st.expander(
+                f"{status_icon} {r['test_name']} — {r['description']}",
+                expanded=not r.get("passed"),
+            ):
+                # Per-threshold rows
+                checks = r.get("checks", [])
+                if checks:
+                    check_rows = []
+                    for c in checks:
+                        actual = c["actual"]
+                        check_rows.append({
+                            "check": c["name"],
+                            "op": c["op"],
+                            "threshold": c["threshold"],
+                            "actual": "—" if actual is None else round(actual, 6),
+                            "result": "✅ PASS" if c["passed"] else "❌ FAIL",
+                            "note": c.get("note", ""),
+                        })
+                    st.dataframe(pd.DataFrame(check_rows),
+                                 use_container_width=True, hide_index=True)
+                else:
+                    st.info("No thresholds declared for this test.")
+
+                # Key metrics + raw result
+                kpi = st.columns(4)
+                kpi[0].metric("Elapsed (s)", f"{float(r.get('elapsed_s', 0)):.3f}")
+                kpi[1].metric("Avg power (W)", f"{float(r.get('avg_power_W', 0)):.1f}")
+                kpi[2].metric("Energy (J)", f"{float(r.get('energy_J', 0)):.2f}")
+                ept = r.get("energy_per_token_J")
+                epg = r.get("energy_per_GFLOP_J")
+                epgb = r.get("energy_per_GB_J")
+                if ept is not None:
+                    kpi[3].metric("J / token", f"{ept:.6f}")
+                elif epg is not None:
+                    kpi[3].metric("J / GFLOP", f"{epg:.4f}")
+                elif epgb is not None:
+                    kpi[3].metric("J / GB", f"{epgb:.3f}")
+
+                with st.expander("Raw metrics JSON", expanded=False):
+                    raw = {k: v for k, v in r.items()
+                           if k not in {"checks"} and not k.startswith("pass_")}
+                    st.json(raw)
+
+                # Inline advice
+                bench = r.get("benchmark") or r.get("kind")
+                if bench == "ai_preset":
                     level, advice = energy_advice_ai(r)
-                    show_advice_box(level, f"**{r['test_name']}** — {advice}")
+                    show_advice_box(level, advice)
+                elif bench == "memory_bandwidth":
+                    level, advice = energy_advice_memory(r)
+                    show_advice_box(level, advice)
+                elif bench == "matmul" or r.get("kind") == "matmul":
+                    level, advice = energy_advice_matmul(r)
+                    show_advice_box(level, advice)
 
 
 # ── Run history ─────────────────────────────────────────────────────────────
