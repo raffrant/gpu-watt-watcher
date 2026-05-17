@@ -156,22 +156,43 @@ function Landing() {
         <div className="grid gap-8 lg:grid-cols-2 lg:items-start">
           <div>
             <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">
-              Up and running in 30 seconds
+              Launch the bench on your machine
             </h2>
             <p className="mt-3 text-muted-foreground">
-              Requires an NVIDIA GPU with NVML/nvidia-smi accessible, plus
-              Python 3.10+. The full app lives in{" "}
+              The Streamlit app talks to NVML on a real NVIDIA GPU, so it has to
+              run locally (or on a GPU host you control). Three copy-paste
+              commands and the full 8-tab control panel opens at{" "}
               <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">
-                gpu_energy_bench/
+                localhost:8501
               </code>
               .
             </p>
-            <ul className="mt-6 space-y-3 text-sm">
+
+            <div className="mt-6 flex flex-wrap gap-3">
+              <Button asChild size="lg">
+                <a
+                  href="https://github.com/codespaces/new?machine=gpuLargePremiumLinux"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <Terminal className="mr-2 h-4 w-4" />
+                  Open on a GPU host
+                </a>
+              </Button>
+              <Button asChild variant="outline" size="lg">
+                <a href="#install-block">
+                  <Download className="mr-2 h-4 w-4" />
+                  Run locally
+                </a>
+              </Button>
+            </div>
+
+            <ul className="mt-8 space-y-3 text-sm">
               <Step n={1} title="Install dependencies">
                 Tiny set: pynvml, torch, streamlit, plotly, pyyaml, pandas.
               </Step>
               <Step n={2} title="Launch the bench">
-                Streamlit serves a 7-tab control panel locally.
+                Streamlit serves the 8-tab GPU Energy Lab locally on port 8501.
               </Step>
               <Step n={3} title="Define tests in tests.yaml">
                 Declarative thresholds. Edit and rerun — no code changes.
@@ -182,7 +203,10 @@ function Landing() {
             </ul>
           </div>
 
-          <Card className="overflow-hidden border-border bg-card">
+          <Card
+            id="install-block"
+            className="overflow-hidden border-border bg-card"
+          >
             <div className="flex items-center gap-2 border-b border-border bg-muted/40 px-4 py-2">
               <span className="h-2.5 w-2.5 rounded-full bg-destructive/70" />
               <span className="h-2.5 w-2.5 rounded-full bg-chart-4/70" />
@@ -190,13 +214,25 @@ function Landing() {
               <span className="ml-2 font-mono text-xs text-muted-foreground">
                 terminal
               </span>
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard?.writeText(
+                    `pip install -r gpu_energy_bench/requirements.txt\nstreamlit run gpu_energy_bench/gpu_energy_lab.py`,
+                  );
+                }}
+                className="ml-auto rounded border border-border px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                aria-label="Copy install commands"
+              >
+                Copy
+              </button>
             </div>
             <pre className="overflow-x-auto p-4 font-mono text-xs leading-relaxed text-foreground">
 {`# 1. install
 pip install -r gpu_energy_bench/requirements.txt
 
-# 2. run the bench (opens in browser)
-streamlit run gpu_energy_bench/streamlit_app.py
+# 2. run the bench (opens http://localhost:8501 in your browser)
+streamlit run gpu_energy_bench/gpu_energy_lab.py
 
 # 3. add a test in gpu_energy_bench/tests.yaml
 - name: matmul_medium_fp32
@@ -207,9 +243,18 @@ streamlit run gpu_energy_bench/streamlit_app.py
     max_energy_per_gflop: 0.05
     max_temp_c:           85`}
             </pre>
+            <div className="border-t border-border bg-muted/20 px-4 py-3 text-xs text-muted-foreground">
+              No NVIDIA GPU on this machine? Spin up a GPU Codespace, a
+              RunPod/Vast instance, or expose your home rig with{" "}
+              <code className="rounded bg-muted px-1 py-0.5 font-mono">
+                ngrok http 8501
+              </code>{" "}
+              and share the link.
+            </div>
           </Card>
         </div>
       </section>
+
 
       {/* Features */}
       <section id="features" className="border-y border-border bg-muted/20">
