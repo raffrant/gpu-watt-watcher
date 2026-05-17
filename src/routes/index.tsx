@@ -616,3 +616,149 @@ function Tr({
     </tr>
   );
 }
+
+/* -------------------------------------------------------------------------- */
+/* Hosted demo                                                                */
+/* -------------------------------------------------------------------------- */
+
+function HostedDemo() {
+  const [url, setUrl] = useState(DEMO_URL);
+  const [active, setActive] = useState(DEMO_URL);
+  const [fullscreen, setFullscreen] = useState(false);
+  const configured = active.length > 0;
+
+  return (
+    <section id="demo" className="border-t border-border">
+      <div className="mx-auto max-w-6xl px-6 py-16">
+        <div className="flex flex-wrap items-center gap-3">
+          <Badge variant="outline" className="font-mono">
+            <Server className="mr-1 h-3 w-3" />
+            hosted demo
+          </Badge>
+          <Badge className="bg-chart-4/20 font-mono text-chart-4 hover:bg-chart-4/30">
+            {DEMO_GPU_LABEL}
+          </Badge>
+        </div>
+        <h2 className="mt-4 text-2xl font-semibold tracking-tight sm:text-3xl">
+          Try the bench on a demo GPU
+        </h2>
+        <p className="mt-3 max-w-2xl text-muted-foreground">
+          This is a shared instance running on a GPU we control. Every number
+          you see here describes the{" "}
+          <span className="font-medium text-foreground">demo GPU</span> — not
+          your own machine. For numbers about your own hardware, use the
+          Quickstart above and run the bench locally.
+        </p>
+
+        <div className="mt-6 flex items-start gap-2 rounded-md border border-chart-4/40 bg-chart-4/5 p-3 text-xs text-chart-4">
+          <Info className="mt-0.5 h-4 w-4 shrink-0" />
+          <p>
+            Results below reflect the <strong>{DEMO_GPU_LABEL}</strong> under
+            shared load. They are illustrative, not a benchmark of your device.
+          </p>
+        </div>
+
+        {!configured && (
+          <Card className="mt-6 border-border bg-card p-6">
+            <h3 className="font-semibold">Point at your hosted instance</h3>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Run the Streamlit app on a GPU box you control (RunPod, Lambda,
+              your own server) and expose it over HTTPS. Then either set the{" "}
+              <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">
+                VITE_DEMO_URL
+              </code>{" "}
+              env var at build time, or paste the URL below to preview it in
+              this session.
+            </p>
+            <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+              <input
+                type="url"
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                placeholder="https://demo-gpu.example.com"
+                className="flex-1 rounded-md border border-border bg-background px-3 py-2 font-mono text-xs focus:outline-none focus:ring-1 focus:ring-ring"
+              />
+              <Button
+                onClick={() => setActive(url.trim())}
+                disabled={!url.trim()}
+              >
+                Load demo
+              </Button>
+            </div>
+            <pre className="mt-4 overflow-x-auto rounded-md bg-muted p-3 font-mono text-[11px] leading-relaxed text-muted-foreground">
+{`# On the GPU host
+pip install -r gpu_energy_bench/requirements.txt
+streamlit run gpu_energy_bench/gpu_energy_lab.py \\
+  --server.port 8501 --server.address 0.0.0.0
+
+# Then expose via your reverse proxy / ngrok / Cloudflare tunnel
+# and set VITE_DEMO_URL=https://your-host at build time.`}
+            </pre>
+          </Card>
+        )}
+
+        {configured && (
+          <Card className="mt-6 overflow-hidden border-border bg-card">
+            <div className="flex flex-wrap items-center gap-2 border-b border-border bg-muted/40 px-4 py-2">
+              <Server className="h-3.5 w-3.5 text-chart-4" />
+              <span className="font-mono text-xs text-muted-foreground">
+                {DEMO_GPU_LABEL}
+              </span>
+              <span className="font-mono text-[10px] text-muted-foreground/70">
+                {active}
+              </span>
+              <div className="ml-auto flex gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setFullscreen((v) => !v)}
+                >
+                  <Maximize2 className="mr-1 h-3 w-3" />
+                  {fullscreen ? "Exit fullscreen" : "Fullscreen"}
+                </Button>
+                <Button size="sm" variant="outline" asChild>
+                  <a href={active} target="_blank" rel="noopener noreferrer">
+                    <ExternalLink className="mr-1 h-3 w-3" />
+                    Open in new tab
+                  </a>
+                </Button>
+              </div>
+            </div>
+            <div
+              className={
+                fullscreen
+                  ? "fixed inset-0 z-50 bg-background"
+                  : "relative h-[720px]"
+              }
+            >
+              {fullscreen && (
+                <button
+                  type="button"
+                  onClick={() => setFullscreen(false)}
+                  className="absolute right-4 top-4 z-10 rounded border border-border bg-card px-3 py-1 text-xs"
+                >
+                  Close
+                </button>
+              )}
+              <iframe
+                src={active}
+                title={`GPU Energy Bench on ${DEMO_GPU_LABEL}`}
+                className="h-full w-full border-0"
+                allow="clipboard-read; clipboard-write"
+              />
+            </div>
+            <div className="border-t border-border bg-muted/20 px-4 py-3 text-xs text-muted-foreground">
+              You are viewing the bench running on the{" "}
+              <span className="font-medium text-foreground">
+                {DEMO_GPU_LABEL}
+              </span>
+              . Any energy, FLOPs, or temperature reading is a property of that
+              card, not your local machine.
+            </div>
+          </Card>
+        )}
+      </div>
+    </section>
+  );
+}
+
