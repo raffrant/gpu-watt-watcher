@@ -384,11 +384,14 @@ with tab_tests:
                 )
             passed, checks = evaluate(spec, {
                 "gflops_per_s": metrics.gflops_per_s,
+                "throughput_per_s": metrics.throughput_per_s,
                 "energy_j": metrics.energy_j,
                 "energy_per_gflop": metrics.energy_per_gflop,
+                "energy_per_work_unit": metrics.energy_per_work_unit,
                 "avg_power_w": metrics.avg_power_w,
                 "max_temp_c": metrics.max_temp_c,
                 "elapsed_s": metrics.elapsed_s,
+                "latency_p95_ms": metrics.latency_p95_ms,
             })
             _stash_last_run(f"test:{spec.name}", metrics, sampler)
 
@@ -398,19 +401,26 @@ with tab_tests:
                 power_limit_w=gpu_snap.power_limit_w if gpu_snap else None,
                 gpu_name=gpu_snap.name if gpu_snap else None,
                 passed=passed, checks=checks, samples_df=_samples_df(sampler),
+                driver_version=nv.driver_version(),
+                cuda_version=nv.cuda_driver_version(),
             )
 
             st.subheader(f"Result: {spec.name}")
             _render_check_panel(checks)
 
             st.markdown("**Run metrics**")
+            wu = metrics.work_unit or "work"
             mdf = pd.DataFrame([{
+                "workload": metrics.workload_type,
+                f"throughput ({wu}/s)": round(metrics.throughput_per_s, 2),
+                f"J/{wu}": round(metrics.energy_per_work_unit, 6),
                 "gflops/s": round(metrics.gflops_per_s, 1),
                 "energy (J)": round(metrics.energy_j, 2),
-                "J/GFLOP": round(metrics.energy_per_gflop, 4),
                 "avg power (W)": round(metrics.avg_power_w, 1),
                 "max temp (°C)": round(metrics.max_temp_c, 1),
                 "elapsed (s)": round(metrics.elapsed_s, 3),
+                "p95 latency (ms)": (round(metrics.latency_p95_ms, 2)
+                                     if metrics.latency_p95_ms else None),
             }])
             st.dataframe(mdf, use_container_width=True)
 
