@@ -265,6 +265,10 @@ streamlit run gpu_energy_bench/gpu_energy_lab.py
         </div>
       </section>
 
+      {/* Hosted demo */}
+      <HostedDemo />
+
+
 
       {/* Features */}
       <section id="features" className="border-y border-border bg-muted/20">
