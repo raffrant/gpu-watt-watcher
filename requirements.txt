@@ -3,3 +3,4 @@ torch
 pynvml
 pandas
 plotly
+yaml
