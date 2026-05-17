@@ -76,3 +76,5 @@ Visit **https://gpuegy.dev/** for:
 - direct links to this repo and usage instructions
 
 The app always runs **on your GPU**, from your machine. Nothing is sent to a server unless you choose to share results yourself.
+
+## 7. Used Lovable to buy a domain and help with the web development. 
