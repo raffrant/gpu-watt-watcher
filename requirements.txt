@@ -2,3 +2,4 @@ streamlit
 torch
 pynvml
 pandas
+plotly
