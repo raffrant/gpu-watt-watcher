@@ -312,26 +312,71 @@ with tab_tests:
         chosen_name = st.selectbox("Test to edit & run", names)
         spec = next(s for s in specs if s.name == chosen_name)
 
+        st.caption(
+            f"**Workload:** `{spec.workload_type or 'microbenchmark'}` · "
+            f"**Kernel:** `{spec.kernel}` · "
+            f"**Power cap (declared):** "
+            f"{f'{spec.power_limit_w:.0f} W' if spec.power_limit_w else '—'}"
+        )
+
         st.markdown("**Override parameters for this run** (does not modify tests.yaml)")
         p = dict(spec.params)
-        c1, c2, c3 = st.columns(3)
-        size_v = c1.number_input("size", 128, 16384,
-                                 int(p.get("size", 4096)), 128, key="t_size")
-        reps_v = c2.number_input("repetitions", 1, 1000,
-                                 int(p.get("repetitions", 10)), key="t_reps")
-        dtype_default = str(p.get("dtype", "float32"))
+
+        # Matmul has a fixed UI; everything else gets a JSON editor + dtype select.
         dtype_options = ["float32", "float16", "bfloat16"]
-        dtype_idx = dtype_options.index(dtype_default) if dtype_default in dtype_options else 0
-        dtype_v = c3.selectbox("dtype", dtype_options, index=dtype_idx, key="t_dtype")
+        if spec.kernel == "matmul":
+            c1, c2, c3 = st.columns(3)
+            size_v = c1.number_input("size", 128, 16384,
+                                     int(p.get("size", 4096)), 128, key="t_size")
+            reps_v = c2.number_input("repetitions", 1, 1000,
+                                     int(p.get("repetitions", 10)), key="t_reps")
+            dtype_default = str(p.get("dtype", "float32"))
+            dtype_idx = dtype_options.index(dtype_default) if dtype_default in dtype_options else 0
+            dtype_v = c3.selectbox("dtype", dtype_options, index=dtype_idx, key="t_dtype")
+            override = {"size": int(size_v), "repetitions": int(reps_v), "dtype": dtype_v}
+            params_json_err = None
+        else:
+            params_text = st.text_area(
+                "Params (JSON)", value=json.dumps(p, indent=2),
+                height=200, key=f"t_json_{spec.name}",
+                help="Edit any field — batch_size, seq_len, gen_tokens, dtype, …",
+            )
+            try:
+                override = json.loads(params_text or "{}")
+                params_json_err = None
+            except Exception as e:
+                override = {}
+                params_json_err = str(e)
+                st.error(f"Invalid JSON: {e}")
 
         device = st.selectbox("Device", ["cuda", "cpu"], key="tests_device")
+        apply_cap = False
+        sudo_cap = False
+        if spec.power_limit_w:
+            apc1, apc2 = st.columns([3, 2])
+            apply_cap = apc1.checkbox(
+                f"Apply this test's declared power cap ({spec.power_limit_w:.0f} W) "
+                "before running",
+                value=False, key=f"t_apply_cap_{spec.name}",
+            )
+            sudo_cap = apc2.checkbox("Use sudo -n", value=False,
+                                     key=f"t_sudo_cap_{spec.name}")
 
         with st.expander("Thresholds for this test"):
             st.json(spec.thresholds or {})
 
-        if st.button("Run selected test", type="primary"):
-            params = {**p, "size": int(size_v),
-                      "repetitions": int(reps_v), "dtype": dtype_v}
+        if st.button("Run selected test", type="primary",
+                     disabled=bool(params_json_err if spec.kernel != 'matmul' else False)):
+            params = {**p, **override}
+
+            # Optionally apply the declared power cap before the run.
+            if apply_cap and spec.power_limit_w:
+                ok, msg = nv.set_power_limit(float(spec.power_limit_w),
+                                             gpu_index, use_sudo=sudo_cap)
+                if ok:
+                    st.info(f"Power cap set to {spec.power_limit_w:.0f} W. {msg}")
+                else:
+                    st.warning(f"Could not set power cap: {msg}")
             with st.spinner(f"Running {spec.name}…"):
                 metrics, sampler = runner.run(
                     spec.kernel, params, device=device,
