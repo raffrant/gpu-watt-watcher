@@ -283,6 +283,8 @@ with tab_bench:
             power_limit_w=gpu_snap.power_limit_w if gpu_snap else None,
             gpu_name=gpu_snap.name if gpu_snap else None,
             passed=None, checks=None, samples_df=df,
+            driver_version=nv.driver_version(),
+            cuda_version=nv.cuda_driver_version(),
         )
         if not df.empty:
             st.plotly_chart(px.line(df, x="t", y="power_w", title="Power (W) during run"),
