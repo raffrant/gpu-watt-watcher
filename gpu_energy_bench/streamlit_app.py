@@ -669,6 +669,8 @@ with tab_power:
                             power_limit_w=cap, gpu_name=gpu_snap.name,
                             passed=None, checks=None,
                             samples_df=_samples_df(sampler),
+                            driver_version=nv.driver_version(),
+                            cuda_version=nv.cuda_driver_version(),
                         )
                         prog.progress((i + 1) / len(caps))
 
