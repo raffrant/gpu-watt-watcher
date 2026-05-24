@@ -23,7 +23,7 @@ import streamlit as st
 from gpu_energy_bench import nvml_utils as nv
 from gpu_energy_bench import kernels, runner, storage
 from gpu_energy_bench.registry import load_tests, evaluate
-
+from gpu_energy_bench.metrics import recommend
 st.set_page_config(page_title="GPU Energy Bench", layout="wide")
 
 TESTS_PATH = Path(__file__).parent / "tests.yaml"
@@ -979,7 +979,16 @@ with tab9:
     mode = st.radio("Optimize for", ["fastest", "greenest", "cheapest"])
     # Load all runs from SQLite, call recommend(runs, mode)
     # Display winner card + full scores table
+    
+    @st.cache_data
+    def load_runs(path="output/power_sweep/power_sweep_results.csv"):
+        try:
+           return pd.read_csv(path)
+        except FileNotFoundError:
+         return pd.DataFrame()
+
+    all_runs = load_runs()
     result = recommend(all_runs, mode=mode)
     st.metric("Best GPU", result["winner"])
     st.info(result["reason"])
-    st.dataframe(pd.DataFrame(result["scores"]))
+    #st.dataframe(pd.DataFrame(result["scores"]))
