@@ -71,3 +71,77 @@ tests:
       max_energy_per_work_unit: 0.10    # J per token
       max_latency_p95_ms: 50
       max_temp_c: 85
+
+# Edit this file to add tests. Each test references a kernel registered in
+# kernels.py. Thresholds are all optional — omit any you don't care about.
+#
+# Available threshold keys:
+#   min_gflops_per_s, min_throughput_per_s,
+#   max_energy_j, max_energy_per_gflop, max_energy_per_work_unit,
+#   max_avg_power_w, max_temp_c, max_elapsed_s, max_latency_p95_ms
+#
+# Optional per-test fields:
+#   workload_type: training | inference | microbenchmark
+#   power_limit_w: <float>     # applied via nvidia-smi -pl before the run
+
+tests:
+  - name: matmul_small_fp32
+    kernel: matmul
+    workload_type: microbenchmark
+    params: { size: 1024, repetitions: 20, dtype: float32 }
+    thresholds:
+      min_gflops_per_s: 500
+      max_temp_c: 85
+
+  - name: matmul_medium_fp32
+    kernel: matmul
+    workload_type: microbenchmark
+    params: { size: 4096, repetitions: 10, dtype: float32 }
+    thresholds:
+      min_gflops_per_s: 2000
+      max_energy_per_gflop: 0.05    # Joules per GFLOP
+      max_temp_c: 85
+
+  - name: matmul_large_fp16
+    kernel: matmul
+    workload_type: microbenchmark
+    params: { size: 8192, repetitions: 5, dtype: float16 }
+    thresholds:
+      min_gflops_per_s: 5000
+      max_avg_power_w: 250
+      max_temp_c: 85
+
+  # ----- AI-style training microbenchmark -----------------------------
+  - name: train_transformer_small_fp16
+    kernel: train_transformer
+    workload_type: training
+    params:
+      batch_size: 16
+      seq_len: 256
+      d_model: 384
+      n_heads: 6
+      n_layers: 2
+      steps: 20
+      dtype: float16
+    thresholds:
+      min_throughput_per_s: 5000        # tokens/s
+      max_energy_per_work_unit: 0.05    # J per token
+      max_temp_c: 85
+
+  # ----- AI-style inference microbenchmark ----------------------------
+  - name: infer_decode_small_fp16
+    kernel: infer_autoregressive
+    workload_type: inference
+    params:
+      batch_size: 4
+      prompt_len: 64
+      gen_tokens: 64
+      d_model: 384
+      n_heads: 6
+      n_layers: 2
+      dtype: float16
+    thresholds:
+      min_throughput_per_s: 200         # tokens/s
+      max_energy_per_work_unit: 0.10    # J per token
+      max_latency_p95_ms: 50
+      max_temp_c: 85      
