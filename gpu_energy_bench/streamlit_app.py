@@ -141,9 +141,9 @@ except Exception as e:
     n_devices = 0
 
 
-tab_info, tab_bench, tab_tests, tab_telemetry, tab_power, tab_history, tab_export = st.tabs(
+tab_info, tab_bench, tab_tests, tab_telemetry, tab_power, tab_history, tab_export, tab8, tab9 = st.tabs(
     ["GPU info", "Matrix benchmark", "Test registry", "Telemetry",
-     "Power limits", "History", "Export"]
+     "Power limits", "History", "Export", "Training Benchmark", "GPU reccomender"]
 )
 
 
