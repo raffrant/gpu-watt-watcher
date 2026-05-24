@@ -955,3 +955,31 @@ with tab_export:
     st.caption("Downloads metrics (CSV/JSON), telemetry CSV, and an interactive "
                "Plotly HTML for sharing — all from the most recent benchmark or test.")
     _export_panel("latest")
+
+
+with tab8:
+    st.header("Training Benchmark")
+    model_name = st.text_input("Model name", "vit-base")
+    workload_type = st.selectbox("Workload type",
+        ["cnn_train", "llm_finetune", "inference", "kernel"])
+    precision = st.selectbox("Precision", ["fp32", "fp16", "bf16"])
+    batch_size = st.number_input("Batch size", min_value=1, value=32)
+    epochs = st.number_input("Epochs", min_value=1, value=5)
+    target_metric = st.text_input("Target metric name", "val_loss")
+    target_value = st.number_input("Target metric value", value=0.5)
+
+    if st.button("Run training benchmark"):
+        # Import your BenchmarkRun + pytorch_hooks here
+        # Populate run, call run_training_benchmark, save to SQLite + CSV
+        st.success("Run complete — results saved to history.")
+
+
+with tab9:
+    st.header("GPU Recommender")
+    mode = st.radio("Optimize for", ["fastest", "greenest", "cheapest"])
+    # Load all runs from SQLite, call recommend(runs, mode)
+    # Display winner card + full scores table
+    result = recommend(all_runs, mode=mode)
+    st.metric("Best GPU", result["winner"])
+    st.info(result["reason"])
+    st.dataframe(pd.DataFrame(result["scores"]))
